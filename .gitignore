@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Project data — per-company JSON files (each developer has their own)
+data/
+
+# Uploads and outputs (per-session)
+uploads/
+outputs/
+!uploads/.gitkeep
+!outputs/.gitkeep
+
+# Logs
+*.log
+
+# Local screenshots (preview ones are kept in the repo)
+screenshots/
+!screenshots/.gitkeep
+
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+*.swp

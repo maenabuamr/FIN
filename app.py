@@ -1,17 +1,8 @@
 """
-FastAPI backend — exposes the financial review system over HTTP.
+FastAPI backend — multi-company financial review system.
 
-Endpoints:
-  GET  /                        — HTML dashboard
-  POST /api/upload              — upload trial balance (Excel/PDF/CSV)
-  POST /api/process             — process the latest upload into statements
-  GET  /api/statements/{id}     — fetch the 4 statements for a job
-  GET  /api/notes/{id}          — fetch the notes for a job
-  POST /api/reclassify          — change a single account's category
-  POST /api/export/{fmt}/{id}   — export Excel or PDF
-  POST /api/compare             — build a side-by-side comparison
-  POST /api/compare/export      — export comparison as Excel or PDF
-  GET  /api/jobs                — list jobs (for the dashboard cards)
+Endpoints are scoped by X-Company-Id header (or ?company_id= query param).
+A "current company" is the company whose data the UI is showing.
 """
 
 from __future__ import annotations
@@ -23,20 +14,23 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from core.account_classifier import AccountClassifier, sub_category_options
+from core import store
+from core.account_classifier import Account, AccountClassifier, sub_category_options
 from core.file_parsers import parse_file
 from core.financial_statements import (
     build_balance_sheet, build_income_statement,
     build_cash_flow, build_equity_statement,
+    Statement, StatementLine,
 )
-from core.notes_generator import build_notes, attach_note_refs
+from core.notes_generator import build_notes, attach_note_refs, Note
 from core.comparator import compare_statements, compare_accounts, kpis
 from core.exporters import export_excel, export_pdf, export_comparison_excel
+from core.validator import validate_trial_balance
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -49,37 +43,53 @@ OUTPUT_DIR = BASE / "outputs"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="نظام المراجعة المالية", version="1.0")
+app = FastAPI(title="نظام المراجعة المالية", version="2.0")
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
-templates = Jinja2Templates(directory=str(BASE / "templates"))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Job store — in-memory; persists JSON files on disk
+# Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-JOBS: dict[str, dict] = {}
+def _company_id(
+    x_company_id: Optional[str] = Header(None),
+    company_id: Optional[str] = Query(None),
+) -> str:
+    """Extract the company id from header or query."""
+    cid = x_company_id or company_id
+    if not cid:
+        raise HTTPException(400, "يجب تحديد الشركة (X-Company-Id header أو ?company_id=)")
+    # Confirm the company exists
+    try:
+        store.get_company(cid)
+    except KeyError:
+        raise HTTPException(404, f"الشركة غير موجودة: {cid}")
+    return cid
 
 
-def _save_job(job_id: str) -> None:
-    """Persist a job to disk so it survives restarts."""
-    p = OUTPUT_DIR / f"{job_id}.json"
-    p.write_text(json.dumps(JOBS[job_id], ensure_ascii=False, default=str), encoding="utf-8")
-
-
-def _load_job(job_id: str) -> dict:
-    if job_id in JOBS:
-        return JOBS[job_id]
-    p = OUTPUT_DIR / f"{job_id}.json"
-    if not p.exists():
+def _load_job_scoped(company_id: str, job_id: str) -> dict:
+    try:
+        return store.get_job(company_id, job_id)
+    except KeyError:
         raise HTTPException(404, "الوظيفة غير موجودة")
-    data = json.loads(p.read_text(encoding="utf-8"))
-    JOBS[job_id] = data
-    return data
+
+
+def _rebuild_statements(accounts: list[Account], company: dict, period: str) -> dict:
+    currency = company.get("currency", "ر.س")
+    bs = build_balance_sheet(accounts, period=period, currency=currency)
+    inc = build_income_statement(accounts, period=period, currency=currency)
+    cf = build_cash_flow(accounts, period=period, currency=currency)
+    eq = build_equity_statement(accounts, period=period, currency=currency)
+    return {
+        "balance_sheet": bs,
+        "income_statement": inc,
+        "cash_flow": cf,
+        "equity": eq,
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Routes — UI
+# UI
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -89,12 +99,75 @@ def home():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Routes — API
+# Companies
 # ──────────────────────────────────────────────────────────────────────────────
 
+@app.get("/api/companies")
+def get_companies():
+    return {"companies": store.list_companies()}
+
+
+@app.post("/api/companies")
+def create_company(payload: dict):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "اسم الشركة مطلوب")
+    c = store.create_company(
+        name=name,
+        currency=payload.get("currency", "ر.س"),
+        tax_id=payload.get("tax_id", ""),
+        notes=payload.get("notes", ""),
+    )
+    return c
+
+
+@app.get("/api/companies/{company_id}")
+def get_company_detail(company_id: str):
+    try:
+        c = store.get_company(company_id)
+    except KeyError:
+        raise HTTPException(404, "الشركة غير موجودة")
+    return c
+
+
+@app.put("/api/companies/{company_id}")
+def update_company(company_id: str, payload: dict):
+    try:
+        return store.update_company(company_id, **payload)
+    except KeyError:
+        raise HTTPException(404, "الشركة غير موجودة")
+
+
+@app.delete("/api/companies/{company_id}")
+def delete_company(company_id: str):
+    try:
+        store.delete_company(company_id)
+    except KeyError:
+        raise HTTPException(404, "الشركة غير موجودة")
+    return {"ok": True}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Jobs (trial balances) — all scoped by company
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/jobs")
+def list_jobs(company_id: str = Query(...)):
+    return {"jobs": store.list_jobs(company_id)}
+
+
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...), period: str = Form("")):
-    """Save the trial balance file to disk and return a job_id."""
+async def upload(
+    file: UploadFile = File(...),
+    company_id: str = Query(...),
+    period: str = Form(""),
+):
+    # Validate company
+    try:
+        company = store.get_company(company_id)
+    except KeyError:
+        raise HTTPException(404, "الشركة غير موجودة")
+
     ext = Path(file.filename).suffix.lower()
     if ext not in (".xlsx", ".xls", ".xlsm", ".pdf", ".csv"):
         raise HTTPException(400, f"نوع الملف غير مدعوم: {ext}")
@@ -105,28 +178,34 @@ async def upload(file: UploadFile = File(...), period: str = Form("")):
     content = await file.read()
     out_path.write_bytes(content)
 
-    # Try to parse immediately so the user can preview the raw rows
     try:
         rows = parse_file(str(out_path))
     except Exception as e:
         raise HTTPException(400, f"فشل قراءة الملف: {e}")
 
-    JOBS[job_id] = {
+    if not rows:
+        raise HTTPException(400, "لم يتم استخراج أي صفوف من الملف")
+
+    job_data = {
         "job_id": job_id,
+        "company_id": company_id,
         "filename": file.filename,
         "saved_as": safe_name,
         "period": period or "الفترة الحالية",
+        "currency": company.get("currency", "ر.س"),
         "uploaded_at": time.time(),
         "status": "uploaded",
+        "is_locked": False,
         "raw_rows": rows,
         "accounts": [],
         "statements": None,
         "notes": None,
     }
-    _save_job(job_id)
+    store.save_job(company_id, job_data)
 
     return {
         "job_id": job_id,
+        "company_id": company_id,
         "filename": file.filename,
         "rows_parsed": len(rows),
         "rows": rows,
@@ -135,13 +214,18 @@ async def upload(file: UploadFile = File(...), period: str = Form("")):
 
 
 @app.post("/api/process/{job_id}")
-def process(job_id: str, company_name: str = "الشركة", period: str = "", currency: str = "ر.س"):
-    """Classify accounts and build the 4 statements + notes."""
-    job = _load_job(job_id)
+def process(
+    job_id: str,
+    company_id: str = Query(...),
+    company_name: Optional[str] = None,
+    period: Optional[str] = None,
+    currency: Optional[str] = None,
+):
+    job = _load_job_scoped(company_id, job_id)
     rows = job["raw_rows"]
 
     if not rows:
-        raise HTTPException(400, "لا توجد بيانات لتجهيزها. تأكد من رفع ملف صحيح.")
+        raise HTTPException(400, "لا توجد بيانات لتجهيزها")
 
     clf = AccountClassifier()
     accounts = [
@@ -150,34 +234,26 @@ def process(job_id: str, company_name: str = "الشركة", period: str = "", c
     ]
 
     period = period or job.get("period", "")
-    as_of = period
+    company = store.get_company(company_id)
+    currency = currency or company.get("currency", "ر.س")
 
-    bs = build_balance_sheet(accounts, as_of=as_of, period=period, currency=currency)
-    inc = build_income_statement(accounts, period=period, currency=currency)
-    cf = build_cash_flow(accounts, period=period, currency=currency)
-    eq = build_equity_statement(accounts, period=period, currency=currency)
-
-    statements = {
-        "balance_sheet": bs,
-        "income_statement": inc,
-        "cash_flow": cf,
-        "equity": eq,
-    }
-    notes = build_notes(accounts, statements, company_name=company_name, period=period)
+    statements = _rebuild_statements(accounts, company, period)
+    notes = build_notes(accounts, statements, company_name=company["name"], period=period)
     attach_note_refs(statements, notes)
 
     job["accounts"] = [a.to_dict() for a in accounts]
     job["statements"] = {k: s.to_dict() for k, s in statements.items()}
     job["notes"] = [n.to_dict() for n in notes]
-    job["company_name"] = company_name
-    job["currency"] = currency
     job["status"] = "ready"
-    _save_job(job_id)
+    job["period"] = period
+    job["currency"] = currency
+    store.save_job(company_id, job)
 
     return {
         "job_id": job_id,
+        "company_id": company_id,
         "status": "ready",
-        "company": company_name,
+        "company": company["name"],
         "period": period,
         "totals": {k: s.totals for k, s in statements.items()},
         "statement_count": len(statements),
@@ -186,80 +262,125 @@ def process(job_id: str, company_name: str = "الشركة", period: str = "", c
     }
 
 
-@app.get("/api/jobs")
-def list_jobs():
-    out = []
-    for job_id, j in JOBS.items():
-        out.append({
-            "job_id": job_id,
-            "filename": j.get("filename"),
-            "period": j.get("period"),
-            "status": j.get("status"),
-            "uploaded_at": j.get("uploaded_at"),
-            "accounts": len(j.get("accounts", [])),
-        })
-    # also include persisted jobs
-    for p in OUTPUT_DIR.glob("*.json"):
-        if p.stem not in JOBS:
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-                out.append({
-                    "job_id": p.stem,
-                    "filename": data.get("filename"),
-                    "period": data.get("period"),
-                    "status": data.get("status"),
-                    "uploaded_at": data.get("uploaded_at"),
-                    "accounts": len(data.get("accounts", [])),
-                })
-            except Exception:
-                pass
-    out.sort(key=lambda x: x.get("uploaded_at", 0), reverse=True)
-    return {"jobs": out}
+@app.get("/api/jobs/{job_id}")
+def get_job_full(job_id: str, company_id: str = Query(...)):
+    job = _load_job_scoped(company_id, job_id)
+    return job
 
 
-@app.get("/api/statements/{job_id}")
-def get_statements(job_id: str):
-    job = _load_job(job_id)
-    if not job.get("statements"):
-        raise HTTPException(400, "لم يتم تجهيز القوائم بعد. استدعي /api/process أولاً.")
-    return {
-        "job_id": job_id,
-        "company": job.get("company_name"),
-        "period": job.get("period"),
-        "currency": job.get("currency"),
-        "statements": job["statements"],
-        "totals": {k: s["totals"] for k, s in job["statements"].items()},
-    }
+@app.delete("/api/jobs/{job_id}")
+def delete_job(job_id: str, company_id: str = Query(...)):
+    try:
+        store.delete_job(company_id, job_id)
+    except Exception:
+        raise HTTPException(404, "الوظيفة غير موجودة")
+    return {"ok": True}
 
 
-@app.get("/api/notes/{job_id}")
-def get_notes(job_id: str):
-    job = _load_job(job_id)
-    return {
-        "job_id": job_id,
-        "notes": job.get("notes", []),
-    }
+# ──────────────────────────────────────────────────────────────────────────────
+# Accounts (editing trial balance)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.put("/api/jobs/{job_id}/accounts/{idx}")
+def update_account(
+    job_id: str,
+    idx: int,
+    payload: dict,
+    company_id: str = Query(...),
+):
+    """Update a single account by index. Re-runs classification & rebuilds statements."""
+    job = _load_job_scoped(company_id, job_id)
+    if job.get("is_locked"):
+        raise HTTPException(403, "ميزان المراجعة مقفل — احذف القفل أولاً")
+
+    raw_rows = job.get("raw_rows", [])
+    if idx < 0 or idx >= len(raw_rows):
+        raise HTTPException(404, f"الحساب رقم {idx} غير موجود")
+
+    r = raw_rows[idx]
+    # Update the row fields
+    for k in ("code", "name", "debit", "credit"):
+        if k in payload:
+            r[k] = payload[k]
+    # Save
+    store.save_job(company_id, job)
+
+    # Rebuild accounts & statements
+    job["status"] = "uploaded"
+    job["accounts"] = []
+    job["statements"] = None
+    store.save_job(company_id, job)
+
+    # Auto-reprocess so the user sees fresh statements
+    return process(job_id, company_id=company_id)
 
 
-@app.post("/api/reclassify/{job_id}")
-def reclassify(job_id: str, payload: dict):
-    """
-    Change a single account's sub_category and rebuild the statements.
-    Body: {"code": "1101", "name": "...", "new_sub": "cash_and_equivalents"}
-    """
-    job = _load_job(job_id)
-    if not job.get("accounts"):
-        raise HTTPException(400, "لم يتم تجهيز القوائم بعد")
+@app.post("/api/jobs/{job_id}/accounts")
+def add_account(
+    job_id: str,
+    payload: dict,
+    company_id: str = Query(...),
+):
+    """Append a new account row to the trial balance."""
+    job = _load_job_scoped(company_id, job_id)
+    if job.get("is_locked"):
+        raise HTTPException(403, "ميزان المراجعة مقفل")
+
+    raw_rows = job.get("raw_rows", [])
+    raw_rows.append({
+        "code": (payload.get("code") or "").strip(),
+        "name": (payload.get("name") or "").strip(),
+        "debit": float(payload.get("debit") or 0),
+        "credit": float(payload.get("credit") or 0),
+    })
+    store.save_job(company_id, job)
+
+    # Auto-reprocess
+    return process(job_id, company_id=company_id)
+
+
+@app.delete("/api/jobs/{job_id}/accounts/{idx}")
+def delete_account(
+    job_id: str,
+    idx: int,
+    company_id: str = Query(...),
+):
+    """Delete an account row."""
+    job = _load_job_scoped(company_id, job_id)
+    if job.get("is_locked"):
+        raise HTTPException(403, "ميزان المراجعة مقفل")
+
+    raw_rows = job.get("raw_rows", [])
+    if idx < 0 or idx >= len(raw_rows):
+        raise HTTPException(404, "الحساب غير موجود")
+    raw_rows.pop(idx)
+    store.save_job(company_id, job)
+    return process(job_id, company_id=company_id)
+
+
+@app.post("/api/jobs/{job_id}/reclassify")
+def reclassify(
+    job_id: str,
+    payload: dict,
+    company_id: str = Query(...),
+):
+    """Change a single account's category (without changing amounts)."""
+    job = _load_job_scoped(company_id, job_id)
+    if job.get("is_locked"):
+        raise HTTPException(403, "ميزان المراجعة مقفل")
 
     new_sub = payload.get("new_sub")
     if not new_sub:
         raise HTTPException(400, "يجب تحديد new_sub")
 
-    target_code = payload.get("code", "")
-    target_name = payload.get("name", "")
+    target_code = (payload.get("code") or "").strip()
+    target_name = (payload.get("name") or "").strip()
 
-    from core.account_classifier import Account, AccountClassifier
-    accs: list[Account] = [Account(**a) for a in job["accounts"]]
+    if not job.get("accounts"):
+        raise HTTPException(400, "لم يتم تجهيز القوائم بعد")
+
+    from core.account_classifier import Account as Acc
+    accs: list[Acc] = [Acc(**a) for a in job["accounts"]]
     matched = False
     for a in accs:
         if (target_code and a.code == target_code) or (target_name and a.name == target_name):
@@ -270,21 +391,16 @@ def reclassify(job_id: str, payload: dict):
         raise HTTPException(404, "لم يتم العثور على الحساب")
 
     period = job.get("period", "")
-    currency = job.get("currency", "ر.س")
-    company = job.get("company_name", "الشركة")
-
-    bs = build_balance_sheet(accs, period=period, currency=currency)
-    inc = build_income_statement(accs, period=period, currency=currency)
-    cf = build_cash_flow(accs, period=period, currency=currency)
-    eq = build_equity_statement(accs, period=period, currency=currency)
-    statements = {"balance_sheet": bs, "income_statement": inc, "cash_flow": cf, "equity": eq}
-    notes = build_notes(accs, statements, company_name=company, period=period)
+    company = store.get_company(company_id)
+    currency = job.get("currency") or company.get("currency", "ر.س")
+    statements = _rebuild_statements(accs, company, period)
+    notes = build_notes(accs, statements, company_name=company["name"], period=period)
     attach_note_refs(statements, notes)
 
     job["accounts"] = [a.to_dict() for a in accs]
     job["statements"] = {k: s.to_dict() for k, s in statements.items()}
     job["notes"] = [n.to_dict() for n in notes]
-    _save_job(job_id)
+    store.save_job(company_id, job)
 
     return {
         "ok": True,
@@ -295,10 +411,61 @@ def reclassify(job_id: str, payload: dict):
     }
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Validation
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/jobs/{job_id}/validate")
+def validate_job(job_id: str, company_id: str = Query(...)):
+    job = _load_job_scoped(company_id, job_id)
+    if not job.get("accounts"):
+        raise HTTPException(400, "لم يتم تجهيز القوائم بعد")
+
+    from core.account_classifier import Account as Acc
+    accs = [Acc(**a) for a in job["accounts"]]
+    statements = None
+    if job.get("statements"):
+        statements = {}
+        for k, v in job["statements"].items():
+            statements[k] = v.get("totals", {})
+
+    report = validate_trial_balance(accs, statements)
+    return report.to_dict()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Statements / Notes
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/statements/{job_id}")
+def get_statements(job_id: str, company_id: str = Query(...)):
+    job = _load_job_scoped(company_id, job_id)
+    if not job.get("statements"):
+        raise HTTPException(400, "لم يتم تجهيز القوائم بعد")
+    return {
+        "job_id": job_id,
+        "company_id": company_id,
+        "company": store.get_company(company_id).get("name"),
+        "period": job.get("period"),
+        "currency": job.get("currency"),
+        "statements": job["statements"],
+        "totals": {k: s["totals"] for k, s in job["statements"].items()},
+    }
+
+
+@app.get("/api/notes/{job_id}")
+def get_notes(job_id: str, company_id: str = Query(...)):
+    job = _load_job_scoped(company_id, job_id)
+    return {"notes": job.get("notes", [])}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Exports
+# ──────────────────────────────────────────────────────────────────────────────
+
 @app.get("/api/export/{fmt}/{job_id}")
-def export(fmt: str, job_id: str):
-    """Export the statements + notes to Excel or PDF."""
-    job = _load_job(job_id)
+def export(fmt: str, job_id: str, company_id: str = Query(...)):
+    job = _load_job_scoped(company_id, job_id)
     if not job.get("statements"):
         raise HTTPException(400, "لم يتم تجهيز القوائم بعد")
 
@@ -307,50 +474,42 @@ def export(fmt: str, job_id: str):
         raise HTTPException(400, "صيغة التصدير غير مدعومة")
 
     period = job.get("period", "")
-    company = job.get("company_name", "الشركة")
+    company = store.get_company(company_id)
+    company_name = company.get("name", "الشركة")
+    currency = job.get("currency") or company.get("currency", "ر.س")
 
-    from core.financial_statements import Statement, StatementLine
-    from core.notes_generator import Note
     statements = {}
     for k, v in job["statements"].items():
         v = dict(v)
         v["lines"] = [StatementLine(**ln) for ln in v.get("lines", [])]
         statements[k] = Statement(**v)
-    notes = []
-    for n in job.get("notes", []):
-        n = dict(n)
-        n["accounts"] = n.get("accounts", [])
-        notes.append(Note(**n))
+    notes = [Note(**n) for n in job.get("notes", [])]
+
+    safe_company = re.sub(r"[^\w\u0600-\u06FF_-]", "_", company_name)[:40] or "company"
 
     if fmt in ("xlsx", "excel"):
         out = OUTPUT_DIR / f"{job_id}.xlsx"
-        path = export_excel(statements, notes, str(out), company, period)
+        path = export_excel(statements, notes, str(out), company_name, period)
         media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        filename = f"{company}_{period}.xlsx"
+        filename = f"{safe_company}_{period}.xlsx"
     else:
         out = OUTPUT_DIR / f"{job_id}.pdf"
-        path = export_pdf(statements, notes, str(out), company, period)
+        path = export_pdf(statements, notes, str(out), company_name, period)
         media = "application/pdf"
-        filename = f"{company}_{period}.pdf"
+        filename = f"{safe_company}_{period}.pdf"
 
     return FileResponse(path, media_type=media, filename=filename)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Comparison endpoints
+# Comparison
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/compare")
 def compare(payload: dict):
-    """
-    Compare two jobs.
-    Body: {"job_current": "...", "job_prior": "...", "company": "...",
-           "period_current": "...", "period_prior": "..."}
-    """
-    job_c = _load_job(payload["job_current"])
-    job_p = _load_job(payload["job_prior"])
+    job_c = store.get_job(payload["company_current"], payload["job_current"])
+    job_p = store.get_job(payload["company_prior"], payload["job_prior"])
 
-    from core.financial_statements import Statement, StatementLine
     stmts_c = {}
     for k, v in job_c["statements"].items():
         v = dict(v); v["lines"] = [StatementLine(**ln) for ln in v.get("lines", [])]
@@ -369,195 +528,58 @@ def compare(payload: dict):
     ks = kpis(stmts_c.get("balance_sheet", stmts_c["balance_sheet"]),
               stmts_p["balance_sheet"])
 
-    # Also a per-account movement table
-    from core.account_classifier import Account
-    accts_c = [Account(**a) for a in job_c["accounts"]]
-    accts_p = [Account(**a) for a in job_p["accounts"]]
+    from core.account_classifier import Account as Acc
+    accts_c = [Acc(**a) for a in job_c["accounts"]]
+    accts_p = [Acc(**a) for a in job_p["accounts"]]
     movements = compare_accounts(accts_c, accts_p)
 
-    return {
-        "ok": True,
-        "kpis": ks,
-        "comparisons": out,
-        "movements": movements,
-    }
-
-
-@app.get("/api/compare/export/{fmt}")
-def export_comparison_get(fmt: str, job_current: str, job_prior: str,
-                          company: str = "الشركة", period_current: str = "", period_prior: str = ""):
-    return export_comparison_impl(fmt, job_current, job_prior, company, period_current, period_prior)
-
-
-@app.post("/api/compare/export/{fmt}")
-def export_comparison(fmt: str, payload: dict):
-    """Export comparison as Excel or PDF. Payload: {job_current, job_prior, company, period_current, period_prior}."""
-    return export_comparison_impl(
-        fmt,
-        payload.get("job_current", ""),
-        payload.get("job_prior", ""),
-        payload.get("company", "الشركة"),
-        payload.get("period_current", ""),
-        payload.get("period_prior", ""),
-    )
-
-
-def export_comparison_impl(fmt, job_current, job_prior, company, period_current, period_prior):
-    """Export the comparison result as Excel or PDF."""
-    job_c = _load_job(job_current)
-    job_p = _load_job(job_prior)
-
-    from core.financial_statements import Statement, StatementLine
-    stmts_c = {}
-    for k, v in job_c["statements"].items():
-        v = dict(v); v["lines"] = [StatementLine(**ln) for ln in v.get("lines", [])]
-        stmts_c[k] = Statement(**v)
-    stmts_p = {}
-    for k, v in job_p["statements"].items():
-        v = dict(v); v["lines"] = [StatementLine(**ln) for ln in v.get("lines", [])]
-        stmts_p[k] = Statement(**v)
-
-    comps = {}
-    for key in stmts_c:
-        if key in stmts_p:
-            comps[key] = [c.to_dict() for c in compare_statements(stmts_c[key], stmts_p[key])]
-
-    ks = kpis(stmts_c.get("balance_sheet", stmts_c["balance_sheet"]),
-              stmts_p["balance_sheet"])
-
-    fmt = fmt.lower()
-    out_id = uuid.uuid4().hex[:8]
-    if fmt in ("xlsx", "excel"):
-        out = OUTPUT_DIR / f"compare_{out_id}.xlsx"
-        path = export_comparison_excel(comps, ks, str(out), company, period_current, period_prior)
-        return FileResponse(path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            filename=f"comparison_{period_current}_vs_{period_prior}.xlsx")
-
-    # PDF comparison
-    out = OUTPUT_DIR / f"compare_{out_id}.pdf"
-    _export_comparison_pdf(comps, ks, str(out), company, period_current, period_prior)
-    return FileResponse(out, media_type="application/pdf",
-                        filename=f"comparison_{period_current}_vs_{period_prior}.pdf")
-
-
-def _export_comparison_pdf(comps, ks, out_path, company, p_cur, p_pr):
-    """Simple PDF export for the comparison."""
-    from core.exporters import _register_fonts, _ARABIC_FONT_NAME, _ARABIC_FONT_BOLD
-    from reportlab.lib.pagesizes import A4
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.lib import colors
-    from reportlab.lib.units import cm
-    from core.arabic_utils import ar, fmt_amount
-
-    _register_fonts()
-
-    out = Path(out_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    doc = SimpleDocTemplate(str(out), pagesize=A4,
-                            rightMargin=2*cm, leftMargin=2*cm,
-                            topMargin=2*cm, bottomMargin=2*cm)
-
-    styles = {
-        "t": ParagraphStyle("T", fontName=_ARABIC_FONT_BOLD, fontSize=22, alignment=2, leading=30),
-        "s": ParagraphStyle("S", fontName=_ARABIC_FONT_NAME, fontSize=12, alignment=2, textColor=colors.HexColor("#475569"), leading=18),
-        "h": ParagraphStyle("H", fontName=_ARABIC_FONT_BOLD, fontSize=16, alignment=2, leading=22, spaceAfter=10),
-        "cell": ParagraphStyle("C", fontName=_ARABIC_FONT_NAME, fontSize=10, alignment=2, leading=14),
-    }
-
-    story = []
-    story.append(Paragraph(ar(company), styles["t"]))
-    story.append(Paragraph(ar(f"مقارنة: {p_pr} ←→ {p_cur}"), styles["s"]))
-    story.append(Spacer(1, 1*cm))
-
-    story.append(Paragraph(ar("المؤشرات الرئيسية"), styles["h"]))
-    kpi_data = [[ar("المؤشر"), ar("الفترة الحالية"), ar("الفترة السابقة"), ar("التغير"), ar("نسبة %")]]
-    for k in ks:
-        kpi_data.append([
-            ar(k["name"]),
-            ar(fmt_amount(k["current"])),
-            ar(fmt_amount(k["prior"])),
-            ar(fmt_amount(k["change"])),
-            ar(f"{k['pct_change']*100:.1f}%") if k.get("pct_change") is not None else "—",
-        ])
-    t = Table(kpi_data, colWidths=[6*cm, 3*cm, 3*cm, 3*cm, 2*cm])
-    t.setStyle(TableStyle([
-        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
-        ("FONT", (0, 0), (-1, 0), _ARABIC_FONT_BOLD, 10),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0F172A")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CBD5E1")),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
-    story.append(t)
-    story.append(Spacer(1, 0.6*cm))
-
-    titles = {
-        "balance_sheet": "المركز المالي - مقارنة",
-        "income_statement": "الدخل - مقارنة",
-        "cash_flow": "التدفقات النقدية - مقارنة",
-        "equity": "حقوق الملكية - مقارنة",
-    }
-    for key, rows in comps.items():
-        story.append(PageBreak())
-        story.append(Paragraph(ar(titles.get(key, key)), styles["h"]))
-        data = [[ar("البيان"), ar("الحالية"), ar("السابقة"), ar("التغير"), ar("نسبة %")]]
-        for line in rows:
-            data.append([
-                ar(line["label"]),
-                ar(fmt_amount(line["current"])),
-                ar(fmt_amount(line["prior"])),
-                ar(fmt_amount(line["change"])),
-                ar(f"{line['pct_change']*100:.1f}%") if line["pct_change"] is not None else "—",
-            ])
-        t = Table(data, colWidths=[7*cm, 3*cm, 3*cm, 2*cm, 1.5*cm])
-        t.setStyle(TableStyle([
-            ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
-            ("FONT", (0, 0), (-1, -1), _ARABIC_FONT_NAME, 9),
-            ("FONT", (0, 0), (-1, 0), _ARABIC_FONT_BOLD, 10),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0F172A")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CBD5E1")),
-        ]))
-        story.append(t)
-
-    doc.build(story)
-    return str(out)
+    return {"ok": True, "kpis": ks, "comparisons": out, "movements": movements}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Bootstrap samples (only on first run)
+# Bootstrap
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/load_sample")
-def load_sample():
-    """Generate a balanced sample trial balance and load it as a job."""
-    import openpyxl
+def load_sample(company_id: str = Query(...)):
+    """Bootstrap a sample trial balance for the current company."""
     sample_path = BASE / "samples" / "sample_trial_balance.xlsx"
     if not sample_path.exists():
         raise HTTPException(404, "ملف العينة غير موجود")
-    # Reuse upload flow
+
     job_id = uuid.uuid4().hex[:12]
     saved = UPLOAD_DIR / f"{job_id}.xlsx"
     saved.write_bytes(sample_path.read_bytes())
     rows = parse_file(str(saved))
-    JOBS[job_id] = {
+
+    period = "السنة المنتهية في 31 ديسمبر 2024"
+    job_data = {
         "job_id": job_id,
+        "company_id": company_id,
         "filename": "sample_trial_balance.xlsx",
         "saved_as": saved.name,
-        "period": "السنة المنتهية في 31 ديسمبر 2024",
+        "period": period,
         "uploaded_at": time.time(),
         "status": "uploaded",
+        "is_locked": False,
         "raw_rows": rows,
         "accounts": [],
         "statements": None,
         "notes": None,
     }
-    _save_job(job_id)
-    return {"job_id": job_id, "rows_parsed": len(rows)}
+    store.save_job(company_id, job_data)
+    return {"job_id": job_id, "company_id": company_id, "rows_parsed": len(rows)}
+
+
+@app.post("/api/load_demo")
+def load_demo():
+    """Bootstrap a demo company with sample data — convenient for first-time use."""
+    existing = [c for c in store.list_companies() if c["name"] == "شركة المثال"]
+    if existing:
+        c = store.get_company(existing[0]["id"])
+    else:
+        c = create_company({"name": "شركة المثال", "currency": "ر.س"})
+    return c
 
 
 # ──────────────────────────────────────────────────────────────────────────────
