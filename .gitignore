@@ -54,3 +54,12 @@ htmlcov/
 .tox/
 .nox/
 *.swp
+data/
+main
+run_e2e_test.py.bak
+
+# Sensitive data
+data/companies/
+data/
+main
+run_e2e_test.py.bak
