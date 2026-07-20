@@ -180,3 +180,27 @@ def _quick_balance_check(rows: list[dict]) -> bool:
         return abs(t) < 0.01
     except Exception:
         return None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Account Profile
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _profile_path(company_id):
+    return COMPANIES_DIR / company_id / "profile.json"
+
+
+def get_profile(company_id):
+    p = _profile_path(company_id)
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except:
+        return {}
+
+
+def save_profile(company_id, profile):
+    p = _profile_path(company_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -148,6 +148,45 @@ def delete_company(company_id: str):
     return {"ok": True}
 
 
+@app.get("/api/companies/{company_id}/profile")
+def get_company_profile(company_id: str):
+    try:
+        store.get_company(company_id)
+    except KeyError:
+        raise HTTPException(404, "الشركة غير موجودة")
+    profile = store.get_profile(company_id)
+    return {"company_id": company_id, "profile": profile, "count": len(profile)}
+
+
+@app.post("/api/companies/{company_id}/save-profile")
+def save_company_profile(company_id: str, payload: dict = None):
+    try:
+        store.get_company(company_id)
+    except KeyError:
+        raise HTTPException(404, "الشركة غير موجودة")
+    payload = payload or {}
+    new_profile = None
+    if "profile" in payload and isinstance(payload["profile"], dict):
+        new_profile = payload["profile"]
+    elif "job_id" in payload:
+        try:
+            job = store.get_job(company_id, payload["job_id"])
+        except KeyError:
+            raise HTTPException(404, "الوظيفة غير موجودة")
+        new_profile = {}
+        for a in job.get("accounts", []):
+            code = (a.get("code") or "").strip()
+            sub = a.get("sub_category")
+            if code and sub and sub != "unspecified":
+                new_profile[code] = sub
+    else:
+        raise HTTPException(400, "يجب إرسال job_id أو profile")
+    existing = store.get_profile(company_id)
+    existing.update(new_profile)
+    store.save_profile(company_id, existing)
+    return {"ok": True, "company_id": company_id, "count": len(existing)}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Jobs (trial balances) — all scoped by company
 # ──────────────────────────────────────────────────────────────────────────────
@@ -229,10 +268,12 @@ def process(
         raise HTTPException(400, "لا توجد بيانات لتجهيزها")
 
     clf = AccountClassifier()
-    accounts = [
-        clf.classify(r.get("code", ""), r.get("name", ""), r.get("debit", 0), r.get("credit", 0))
-        for r in rows
-    ]
+    accounts = []
+    for r in rows:
+        a = clf.classify(r.get("code", ""), r.get("name", ""), r.get("debit", 0), r.get("credit", 0))
+        if r.get("sub_category"):
+            a.sub_category = r["sub_category"]
+        accounts.append(a)
 
     period = period or job.get("period", "")
     company = store.get_company(company_id)
@@ -374,6 +415,7 @@ def reclassify(
     if not new_sub:
         raise HTTPException(400, "يجب تحديد new_sub")
 
+    target_idx = payload.get("index")
     target_code = (payload.get("code") or "").strip()
     target_name = (payload.get("name") or "").strip()
 
@@ -383,11 +425,24 @@ def reclassify(
     from core.account_classifier import Account as Acc
     accs: list[Acc] = [Acc(**a) for a in job["accounts"]]
     matched = False
-    for a in accs:
-        if (target_code and a.code == target_code) or (target_name and a.name == target_name):
-            AccountClassifier.reclassify(a, new_sub)
-            matched = True
-            break
+    if target_idx is not None:
+        try:
+            i = int(target_idx)
+            if 0 <= i < len(accs):
+                AccountClassifier.reclassify(accs[i], new_sub)
+                raw_rows = job.get("raw_rows", [])
+                if 0 <= i < len(raw_rows):
+                    raw_rows[i]["sub_category"] = new_sub
+                    job["raw_rows"] = raw_rows
+                matched = True
+        except (ValueError, TypeError):
+            pass
+    if not matched:
+        for a in accs:
+            if (target_code and a.code == target_code) or (target_name and a.name == target_name):
+                AccountClassifier.reclassify(a, new_sub)
+                matched = True
+                break
     if not matched:
         raise HTTPException(404, "لم يتم العثور على الحساب")
 

@@ -413,7 +413,7 @@ def _notes_table(n: Note) -> Table:
         data.append([
             ar(a["name"]),
             ar(a["code"]),
-            ar(fmt_amount(a["amount"])),
+            fmt_amount(a["amount"]),
         ])
     t = Table(data, colWidths=[10 * cm, 3 * cm, 3 * cm])
     t.setStyle(TableStyle([

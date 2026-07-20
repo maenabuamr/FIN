@@ -143,16 +143,17 @@ def _map_columns(header):
     for i, h in enumerate(header):
         if not h:
             continue
-        h_low = h.lower()
-        if "code" in h_low or "رقم" in h or "رمز" in h or "كود" in h:
+        # Normalize Arabic letters to handle variations (إ/أ/آ -> ا, ة -> ه, ى -> ي)
+        h_norm = h.replace("إ", "ا").replace("أ", "ا").replace("آ", "ا").replace("ة", "ه").replace("ى", "ي").lower()
+        if "code" in h_norm or "رقم" in h_norm or "رمز" in h_norm or "كود" in h_norm:
             mapping.setdefault("code", i)
-        elif "account" in h_low or "اسم" in h or "حساب" in h or "البيان" in h:
+        elif "account" in h_norm or "اسم" in h_norm or "الاسم" in h_norm or "اسم_الحساب" in h_norm or "اسم الحساب" in h_norm or "حساب" in h_norm or "البيان" in h_norm or "بيان" in h_norm or "description" in h_norm:
             mapping.setdefault("name", i)
-        elif "balance" in h_low or "رصيد" in h or "الرصيد" in h:
+        elif "balance" in h_norm or "رصيد" in h_norm or "الرصيد" in h_norm:
             mapping.setdefault("balance", i)
-        elif "debit" in h_low or "مدين" in h:
+        elif "debit" in h_norm or "مدين" in h_norm:
             mapping.setdefault("debit", i)
-        elif "credit" in h_low or "دائن" in h:
+        elif "credit" in h_norm or "دائن" in h_norm:
             mapping.setdefault("credit", i)
     return mapping
 
