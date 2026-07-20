@@ -90,10 +90,10 @@ const App = (() => {
         if (!tb) return;
         const showBack = state.currentView !== 'dashboard' && state.currentView !== 'companies';
         const companyName = state.currentCompany ? state.currentCompany.name : '';
-        tb.innerHTML = `<div style="display:flex;align-items:center;gap:16px;width:100%;">
-            ${showBack ? '<button class="btn btn-outline" onclick="App.goBack()" style="padding:6px 12px;">← رجوع</button>' : ''}
-            <h1 style="margin:0;font-size:24px;">${titles[state.currentView] || ''}</h1>
-            ${companyName ? `<span style="margin-right:auto;background:#eff6ff;padding:6px 14px;border-radius:20px;border:1px solid #bfdbfe;font-size:14px;font-weight:600;color:#1e40af;">📁 ${companyName}</span>` : '<span style="margin-right:auto;"></span>'}
+        tb.innerHTML = '<div style="display:flex;align-items:center;gap:16px;width:100%;">
+            ' + (showBack ? '<button class="btn btn-outline" onclick="App.goBack()" style="padding:6px 12px;">← رجوع</button>' : '') + '
+            <h1 style="margin:0;font-size:24px;">' + (titles[state.currentView] || '') + '</h1>
+            ' + (companyName ? `<span style="margin-right:auto;background:#eff6ff;padding:6px 14px;border-radius:20px;border:1px solid #bfdbfe;font-size:14px;font-weight:600;color:#1e40af;">📁 ${companyName) + '</span>' : '<span style="margin-right:auto;"></span>'}
         </div>`;
     }
     
@@ -423,7 +423,7 @@ const App = (() => {
             main.appendChild(el('div', { style: `background:${isBalanced ? '#f0fdf4' : '#fef2f2'};border:2px solid ${isBalanced ? '#86efac' : '#fca5a5'};border-radius:12px;padding:20px;margin-bottom:20px;` },
                 el('div', { style: 'display:flex;align-items:center;gap:12px;margin-bottom:12px;' },
                     el('div', { style: 'font-size:32px;' }, isBalanced ? '✅' : '❌'),
-                    el('div', {}, el('div', { style: `font-size:20px;font-weight:700;color:${isBalanced ? '#15803d' : '#991b1b'};` }, isBalanced ? 'الميزان متوازن' : 'غير متوازن'))),
+                    el('div', {}, el('div', { style: 'font-size:20px;font-weight:700;color:${isBalanced ? '#15803d' : '#991b1b'};` }, isBalanced ? 'الميزان متوازن' : 'غير متوازن'))),
                 el('div', { style: 'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;' },
                     el('div', { style: 'background:#fff;padding:12px;border-radius:8px;' }, el('div', { style: 'font-size:12px;color:#6b7280;' }, 'الأصول'), el('div', { style: 'font-size:18px;font-weight:700;color:#0c4a6e;' }, fmt(totalAssets))),
                     el('div', { style: 'background:#fff;padding:12px;border-radius:8px;' }, el('div', { style: 'font-size:12px;color:#6b7280;' }, 'الالتزامات'), el('div', { style: 'font-size:18px;font-weight:700;color:#0c4a6e;' }, fmt(totalLiab))),
