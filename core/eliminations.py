@@ -119,22 +119,22 @@ def detect_ic_transactions(jobs_data: list[dict]) -> list[dict]:
 def pair_transactions(transactions: list[dict]) -> list[dict]:
     """
     For each transaction, find a matching counterpart in another company
-    with the same account_code (or name) and a complementary sub_category.
+    with a complementary sub_category and (ideally) the same amount.
+
+    Matching strategy:
+      1. Same account_code + complementary sub_category
+      2. Same account_name (or substring) + complementary sub_category
+      3. Same amount + complementary sub_category (the strongest universal signal)
 
     Returns the same list with `matched`, `matched_with`, `diff` filled.
     """
-    # Bucket by (sub_category, account_code) for quick lookup
-    by_key = defaultdict(list)
-    for tx in transactions:
-        if not tx.get("is_debit"):  # only match debits (positive amounts)
-            continue
-        # Match by code OR by name (for fuzzy match)
-        by_key[(tx["sub_category"], tx["account_code"])].append(tx)
-        # also by name
-        by_key[("__name__", tx["account_name"])].append(tx)
-
     paired_results = []
     used = set()
+
+    # Bucket by sub_category for direct lookup
+    by_subcat = defaultdict(list)
+    for tx in transactions:
+        by_subcat[tx["sub_category"]].append(tx)
 
     for tx in transactions:
         if not tx["is_debit"]:
@@ -144,34 +144,39 @@ def pair_transactions(transactions: list[dict]) -> list[dict]:
         if tx_id in used:
             continue
 
-        # Find counterpart: same code, complementary sub_category
         complement_cat = PAIRING_RULES.get(tx["sub_category"])
         if not complement_cat:
             paired_results.append(tx)
             continue
 
-        candidates = by_key.get((complement_cat, tx["account_code"]), [])
-        candidates = [c for c in candidates if c["id"] != tx_id and c["id"] not in used
+        candidates = by_subcat.get(complement_cat, [])
+        candidates = [c for c in candidates
+                      if c["id"] != tx_id and c["id"] not in used
                       and c["company_id"] != tx["company_id"]]
+
         if not candidates:
-            # try by name
-            candidates = by_key.get(("__name__", tx["account_name"]), [])
-            candidates = [c for c in candidates if c["id"] != tx_id and c["id"] not in used
-                          and c["company_id"] != tx["company_id"] and c["sub_category"] == complement_cat]
+            paired_results.append(tx)
+            continue
 
-        if candidates:
-            # pick smallest diff
-            best = min(candidates, key=lambda c: abs(c["amount"] - tx["amount"]))
-            diff = round(tx["amount"] - best["amount"], 2)
-            tx["matched"] = True
-            tx["matched_with"] = best["id"]
-            tx["diff"] = diff
-            best["matched"] = True
-            best["matched_with"] = tx_id
-            best["diff"] = -diff
-            used.add(tx_id)
-            used.add(best["id"])
+        # Score function: prioritize same code, then same name, then same amount
+        def _score(c):
+            same_code = 1 if (c["account_code"] and c["account_code"] == tx["account_code"]) else 0
+            same_name = 1 if (c["account_name"] and (
+                tx["account_name"] in c["account_name"] or c["account_name"] in tx["account_name"]
+            )) else 0
+            amount_diff = abs(c["amount"] - tx["amount"])
+            return (same_code, same_name, -amount_diff)
 
+        best = max(candidates, key=_score)
+        diff = round(tx["amount"] - best["amount"], 2)
+        tx["matched"] = True
+        tx["matched_with"] = best["id"]
+        tx["diff"] = diff
+        best["matched"] = True
+        best["matched_with"] = tx_id
+        best["diff"] = -diff
+        used.add(tx_id)
+        used.add(best["id"])
         paired_results.append(tx)
 
     return paired_results
