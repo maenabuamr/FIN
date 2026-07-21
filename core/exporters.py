@@ -592,7 +592,7 @@ def export_notes_comparison_sheet(wb, detailed_notes: list[dict], period_current
     left = Alignment(horizontal="left", vertical="center")
 
     # عرض الأعمدة: الحساب | الرمز | الحالية | السابقة | الفرق
-    col_widths = [50, 18, 20, 20, 18]
+    col_widths = [55, 18, 22, 22]
     for col, w in enumerate(col_widths, 1):
         ws.column_dimensions[chr(64 + col)].width = w
 
@@ -600,7 +600,7 @@ def export_notes_comparison_sheet(wb, detailed_notes: list[dict], period_current
     for note in detailed_notes:
         # 1) عنوان الإيضاح: "1 - النقدية وما في حكمها"
         ws.cell(row=row, column=1, value=f'{note.get("number", "")} - {note.get("title", "")}')
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
         cell = ws.cell(row=row, column=1)
         cell.font = title_font
         cell.alignment = right
@@ -612,7 +612,7 @@ def export_notes_comparison_sheet(wb, detailed_notes: list[dict], period_current
         body = note.get("body", "")
         if body:
             ws.cell(row=row, column=1, value=body)
-            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
             cell = ws.cell(row=row, column=1)
             cell.font = body_font
             cell.alignment = right
@@ -625,7 +625,6 @@ def export_notes_comparison_sheet(wb, detailed_notes: list[dict], period_current
             ("الرمز", header_fill),
             (f"الفترة الحالية ({period_current})" if period_current else "الفترة الحالية", current_header_fill),
             (f"الفترة السابقة ({period_prior})" if period_prior else "الفترة السابقة", prev_header_fill),
-            ("الفرق", diff_header_fill),
         ]
         for col, (h, fill) in enumerate(headers, 1):
             cell = ws.cell(row=row, column=col, value=h)
@@ -669,7 +668,7 @@ def export_notes_comparison_sheet(wb, detailed_notes: list[dict], period_current
             ws.cell(row=row, column=2, value=code).alignment = Alignment(horizontal="center", readingOrder=2)
             ws.cell(row=row, column=2).font = Font(name="Calibri", size=10, color="475569")
 
-            for col_idx, val in [(3, cur_amt), (4, prev_amt), (5, diff_amt)]:
+            for col_idx, val in [(3, cur_amt), (4, prev_amt)]:
                 c = ws.cell(row=row, column=col_idx, value=val)
                 c.number_format = "#,##0.00;(#,##0.00)"
                 c.alignment = left
@@ -681,7 +680,7 @@ def export_notes_comparison_sheet(wb, detailed_notes: list[dict], period_current
 
         if not all_codes:
             ws.cell(row=row, column=1, value="— لا توجد حسابات —")
-            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
             ws.cell(row=row, column=1).alignment = center
             ws.cell(row=row, column=1).font = body_font
             row += 1
@@ -696,7 +695,6 @@ def export_notes_comparison_sheet(wb, detailed_notes: list[dict], period_current
         for col_idx, val, color in [
             (3, note.get("current_total", 0), "1E40AF"),
             (4, note.get("previous_total", 0), "92400E"),
-            (5, note.get("diff", 0), "15803D"),
         ]:
             c = ws.cell(row=row, column=col_idx, value=val)
             c.font = Font(name="Calibri", size=11, bold=True, color=color)

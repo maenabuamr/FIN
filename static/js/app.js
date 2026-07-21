@@ -833,27 +833,23 @@ const App = (() => {
         // header
         const thead = el('thead', {}, el('tr', { style: 'background:#1e3a8a;color:#fff;' },
             el('th', { style: 'text-align:right;color:#fff;padding:8px;' }, 'الحساب'),
-            el('th', { style: 'text-align:center;color:#fff;padding:8px;width:110px;' }, 'الرمز'),
-            el('th', { style: 'text-align:left;color:#fff;padding:8px;width:120px;background:#1e40af;' }, 'الفترة الحالية'),
-            el('th', { style: 'text-align:left;color:#fff;padding:8px;width:120px;background:#92400e;' }, 'الفترة السابقة'),
-            el('th', { style: 'text-align:left;color:#fff;padding:8px;width:110px;background:#15803d;' }, 'الفرق')
+            el('th', { style: 'text-align:center;color:#fff;padding:8px;width:120px;' }, 'الرمز'),
+            el('th', { style: 'text-align:left;color:#fff;padding:8px;width:130px;background:#1e40af;' }, 'الفترة الحالية'),
+            el('th', { style: 'text-align:left;color:#fff;padding:8px;width:130px;background:#92400e;' }, 'الفترة السابقة')
         ));
         table.appendChild(thead);
         const tbody = el('tbody', {});
         if (!accounts || accounts.length === 0) {
-            tbody.appendChild(el('tr', {}, el('td', { colspan: '5', style: 'text-align:center;color:#9ca3af;padding:14px;' }, '— لا توجد حسابات —')));
+            tbody.appendChild(el('tr', {}, el('td', { colspan: '4', style: 'text-align:center;color:#9ca3af;padding:14px;' }, '— لا توجد حسابات —')));
         } else {
             accounts.forEach(a => {
                 const amt = a.amount || 0;
                 const prev = a.prev_amount || 0;
-                const diff = amt - prev;
-                const diffColor = diff >= 0 ? '#15803d' : '#dc2626';
                 tbody.appendChild(el('tr', { style: 'border-bottom:1px solid #f1f5f9;' },
                     el('td', { style: 'text-align:right;padding:6px 10px;' }, a.name || ''),
                     el('td', { style: 'text-align:center;padding:6px;font-family:monospace;color:#475569;' }, String(a.code || '')),
                     el('td', { style: 'text-align:left;padding:6px 10px;font-family:monospace;color:' + (amt < 0 ? '#dc2626' : '#0f172a') + ';font-weight:600;' }, fmt(amt)),
-                    el('td', { style: 'text-align:left;padding:6px 10px;font-family:monospace;color:' + (prev < 0 ? '#dc2626' : '#6b7280') + ';' }, fmt(prev)),
-                    el('td', { style: 'text-align:left;padding:6px 10px;font-family:monospace;font-weight:700;color:' + diffColor + ';' }, fmt(diff))
+                    el('td', { style: 'text-align:left;padding:6px 10px;font-family:monospace;color:' + (prev < 0 ? '#dc2626' : '#6b7280') + ';' }, fmt(prev))
                 ));
             });
         }
@@ -862,8 +858,7 @@ const App = (() => {
             el('td', { style: 'text-align:right;padding:8px 10px;color:#1e40af;' }, 'المجموع'),
             el('td', { style: 'background:#f1f5f9;' }, ''),
             el('td', { style: 'text-align:left;padding:8px 10px;font-family:monospace;color:#1e40af;' }, fmt(total)),
-            el('td', { style: 'text-align:left;padding:8px 10px;font-family:monospace;color:#92400e;' }, fmt(total.prev_total || 0)),
-            el('td', { style: 'text-align:left;padding:8px 10px;font-family:monospace;color:#15803d;' }, fmt(total.diff || 0))
+            el('td', { style: 'text-align:left;padding:8px 10px;font-family:monospace;color:#92400e;' }, fmt(total.prev_total || 0))
         ));
         table.appendChild(tbody);
         return table;
