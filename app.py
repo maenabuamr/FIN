@@ -188,6 +188,57 @@ def save_company_profile(company_id: str, payload: dict = None):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Account Profile (saved classifications per company)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/companies/{company_id}/profile")
+def get_company_profile(company_id: str):
+    """Return the saved account classifications for this company."""
+    try:
+        store.get_company(company_id)
+    except KeyError:
+        raise HTTPException(404, "الشركة غير موجودة")
+    profile = store.get_profile(company_id)
+    return {"company_id": company_id, "profile": profile, "count": len(profile)}
+
+
+@app.post("/api/companies/{company_id}/save-profile")
+def save_company_profile(company_id: str, payload: dict = None):
+    """Save all current account classifications from a job as the company profile.
+
+    Body: {"job_id": "<job_id>"}
+    Or:   {"profile": {"1101": "cash", "1102": "bank", ...}}
+    """
+    try:
+        store.get_company(company_id)
+    except KeyError:
+        raise HTTPException(404, "الشركة غير موجودة")
+
+    payload = payload or {}
+    new_profile = None
+    if "profile" in payload and isinstance(payload["profile"], dict):
+        new_profile = payload["profile"]
+    elif "job_id" in payload:
+        try:
+            job = store.get_job(company_id, payload["job_id"])
+        except KeyError:
+            raise HTTPException(404, "الوظيفة غير موجودة")
+        new_profile = {}
+        for a in job.get("accounts", []):
+            code = (a.get("code") or "").strip()
+            sub = a.get("sub_category")
+            if code and sub and sub != "unspecified":
+                new_profile[code] = sub
+    else:
+        raise HTTPException(400, "يجب إرسال job_id أو profile")
+
+    existing = store.get_profile(company_id)
+    existing.update(new_profile)
+    store.save_profile(company_id, existing)
+    return {"ok": True, "company_id": company_id, "count": len(existing), "profile": existing}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Jobs (trial balances) — all scoped by company
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -266,6 +317,9 @@ def process(
 
     if not rows:
         raise HTTPException(400, "لا توجد بيانات لتجهيزها")
+
+    # Load saved profile for this company (if any) and apply BEFORE classification
+    profile = store.get_profile(company_id)
 
     clf = AccountClassifier()
     accounts = []
@@ -645,3 +699,34 @@ def load_demo():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+
+@app.post("/api/compare/export/{fmt}")
+def export_comparison(fmt: str, payload: dict):
+    """Export comparison of two jobs to Excel."""
+    from fastapi.responses import FileResponse
+    if fmt != "xlsx":
+        raise HTTPException(400, "تنسيق غير مدعوم. استخدم xlsx")
+    
+    current_id = payload.get("current_job_id")
+    previous_id = payload.get("previous_job_id")
+    company_id = payload.get("company_id") or _company_id(x_company_id=None, company_id=None)
+    
+    if not current_id or not previous_id:
+        raise HTTPException(400, "يجب تحديد current_job_id و previous_job_id")
+    
+    try:
+        current_job = store.get_job(company_id, current_id)
+        previous_job = store.get_job(company_id, previous_id)
+    except KeyError as e:
+        raise HTTPException(404, f"وظيفة غير موجودة: {e}")
+    
+    company = store.get_company(company_id)
+    file_path = export_comparison_excel(current_job, previous_job, company)
+    
+    fname = f"comparison_{current_job.get('period', 'A')}_vs_{previous_job.get('period', 'B')}.xlsx"
+    return FileResponse(
+        file_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=fname
+    )

@@ -369,7 +369,7 @@ def _statement_flowables(stmt: Statement, styles: dict) -> list:
         if abs(line.amount) > 1e-9 or line.is_subtotal or line.is_total or line.is_total:
             indent = "&nbsp;" * (line.indent * 4)
             label = ar(f"{indent}{line.label}")
-            amount = ar(fmt_amount(line.amount)) if abs(line.amount) > 1e-9 else "—"
+            amount = fmt_amount(line.amount) if abs(line.amount) > 1e-9 else "—"
             ref = ar(line.ref) if line.ref else ""
             data.append([label, amount, ref])
         else:
