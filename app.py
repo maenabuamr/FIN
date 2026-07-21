@@ -766,6 +766,56 @@ def _build_notes_comparison_rows(current_notes: list, previous_notes: list) -> l
     return rows
 
 
+
+
+def _build_detailed_notes_for_comparison(current_notes, previous_notes):
+    """
+    بناء الإيضاحات المفصّلة للمقارنة بين فترتين.
+    كل إيضاح يحتوي:
+      - number, title, body
+      - current_accounts: list of {code, name, amount}
+      - previous_accounts: list of {code, name, amount}
+      - current_total, previous_total, diff
+    """
+    prev_map = {n.get("title", ""): n for n in (previous_notes or [])}
+    titles = []
+    seen = set()
+    for n in (current_notes or []):
+        t = n.get("title", "")
+        if t and t not in seen:
+            seen.add(t); titles.append(t)
+    for n in (previous_notes or []):
+        t = n.get("title", "")
+        if t and t not in seen:
+            seen.add(t); titles.append(t)
+
+    def _total(n):
+        if not n: return 0
+        for row in (n.get("table") or []):
+            if "الرصيد" in str(row.get("label", "")):
+                return row.get("amount", 0) or 0
+        tbl = n.get("table") or []
+        if tbl: return tbl[0].get("amount", 0) or 0
+        return sum((a.get("amount", 0) or 0) for a in (n.get("accounts") or []))
+
+    notes_out = []
+    for idx, title in enumerate(titles, 1):
+        cn = next((n for n in (current_notes or []) if n.get("title") == title), None)
+        pn = prev_map.get(title)
+        cur_total = _total(cn)
+        prev_total = _total(pn) if pn else 0
+        notes_out.append({
+            "number": idx,
+            "title": title,
+            "body": (cn or {}).get("body", "") or (pn or {}).get("body", ""),
+            "current_accounts": (cn or {}).get("accounts", []) or [],
+            "previous_accounts": (pn or {}).get("accounts", []) or [],
+            "current_total": cur_total,
+            "previous_total": prev_total,
+            "diff": cur_total - prev_total,
+        })
+    return notes_out
+
 def _build_comparison_data(current_job, previous_job):
     """تحويل jobs إلى structure يطابق توقيع export_comparison_excel الأصلي + الإيضاحات."""
     cur_stmts = current_job.get("statements", {}) or {}
@@ -870,11 +920,17 @@ def export_comparison(fmt: str, payload: dict):
     period_prior = previous_job.get("period", "السابقة")
     
     comparisons, kpis = _build_comparison_data(current_job, previous_job)
-    detailed_notes = _build_notes_comparison_rows(
+    detailed_full = _build_detailed_notes_for_comparison(
         current_job.get("notes", []), previous_job.get("notes", [])
     )
     out_path = os.path.join(tempfile.gettempdir(), f"comparison_{current_id}_{previous_id}.xlsx")
-    _exp_comp(comparisons, kpis, out_path, company_name, period_current, period_prior, detailed_notes=detailed_notes)
+    _exp_comp(comparisons, kpis, out_path, company_name, period_current, period_prior)
+    # بعد التوليد، أضف ورقة "الإيضاحات المرفقة" المفصّلة
+    from openpyxl import load_workbook as _lwb
+    from core.exporters import export_notes_comparison_sheet as _notes_sheet
+    _wbk = _lwb(out_path)
+    _notes_sheet(_wbk, detailed_full, period_current, period_prior)
+    _wbk.save(out_path)
     
     fname = f"comparison_{period_current}_vs_{period_prior}.xlsx"
     return FileResponse(

@@ -827,6 +827,100 @@ const App = (() => {
         return rows;
     }
 
+    function _renderDetailedNoteCard(note, periodCurrent, periodPrior) {
+        const card = el('div', { style: 'background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);' });
+        card.appendChild(el('div', { style: 'font-size:18px;font-weight:700;color:#1e40af;border-bottom:2px solid #1e40af;padding-bottom:10px;margin-bottom:12px;' }, (note.number || '') + ' - ' + (note.title || '')));
+        if (note.body) {
+            card.appendChild(el('div', { style: 'font-size:12px;color:#6b7280;font-style:italic;margin-bottom:14px;line-height:1.6;' }, note.body));
+        }
+        const curSec = el('div', { style: 'margin-bottom:16px;' });
+        curSec.appendChild(el('div', { style: 'background:#dbeafe;color:#1e40af;font-weight:700;padding:8px 12px;border-radius:6px 6px 0 0;font-size:13px;' }, 'الفترة الحالية (' + (periodCurrent || '') + ')'));
+        curSec.appendChild(_renderAccountsTable(note.current_accounts || [], note.current_total || 0, '#1e40af'));
+        card.appendChild(curSec);
+        const prevSec = el('div', { style: 'margin-bottom:16px;' });
+        prevSec.appendChild(el('div', { style: 'background:#fef3c7;color:#92400e;font-weight:700;padding:8px 12px;border-radius:6px 6px 0 0;font-size:13px;' }, 'الفترة السابقة (' + (periodPrior || '') + ')'));
+        prevSec.appendChild(_renderAccountsTable(note.previous_accounts || [], note.previous_total || 0, '#92400e'));
+        card.appendChild(prevSec);
+        const diff = note.diff || 0;
+        const diffBg = diff >= 0 ? '#dcfce7' : '#fee2e2';
+        const diffColor = diff >= 0 ? '#15803d' : '#dc2626';
+        const diffRow = el('div', { style: 'background:' + diffBg + ';border:1px solid ' + diffColor + ';color:' + diffColor + ';padding:10px 14px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;font-weight:700;' },
+            el('span', {}, 'الفرق (الحالية - السابقة)'),
+            el('span', { style: 'font-family:monospace;font-size:15px;' }, fmt(diff))
+        );
+        card.appendChild(diffRow);
+        return card;
+    }
+    function _renderAccountsTable(accounts, total, totalColor) {
+        const table = el('table', { class: 'tb-table', style: 'width:100%;font-size:12px;border:1px solid #e5e7eb;border-top:none;border-collapse:collapse;' });
+        table.appendChild(el('thead', {}, el('tr', { style: 'background:#1e3a8a;color:#fff;' },
+            el('th', { style: 'text-align:right;color:#fff;padding:8px;' }, 'الحساب'),
+            el('th', { style: 'text-align:center;color:#fff;padding:8px;width:120px;' }, 'الرمز'),
+            el('th', { style: 'text-align:left;color:#fff;padding:8px;width:130px;' }, 'المبلغ')
+        )));
+        const tbody = el('tbody', {});
+        if (!accounts || accounts.length === 0) {
+            tbody.appendChild(el('tr', {}, el('td', { colspan: '3', style: 'text-align:center;color:#9ca3af;padding:14px;' }, '— لا توجد حسابات —')));
+        } else {
+            accounts.forEach(a => {
+                const amt = a.amount || 0;
+                tbody.appendChild(el('tr', { style: 'border-bottom:1px solid #f1f5f9;' },
+                    el('td', { style: 'text-align:right;padding:6px 10px;' }, a.name || ''),
+                    el('td', { style: 'text-align:center;padding:6px;font-family:monospace;color:#475569;' }, String(a.code || '')),
+                    el('td', { style: 'text-align:left;padding:6px 10px;font-family:monospace;color:' + (amt < 0 ? '#dc2626' : '#0f172a') + ';font-weight:600;' }, fmt(amt))
+                ));
+            });
+        }
+        tbody.appendChild(el('tr', { style: 'background:#f1f5f9;font-weight:700;' },
+            el('td', { style: 'text-align:right;padding:8px 10px;color:' + totalColor + ';' }, 'المجموع'),
+            el('td', { style: 'background:#f1f5f9;' }, ''),
+            el('td', { style: 'text-align:left;padding:8px 10px;font-family:monospace;color:' + totalColor + ';' }, fmt(total))
+        ));
+        table.appendChild(tbody);
+        return table;
+    }
+
+    function _buildDetailedNoteRows(curNotes, prevNotes) {
+        const prevMap = {};
+        (prevNotes || []).forEach(n => { prevMap[n.title || ''] = n; });
+        const titles = [];
+        const seen = new Set();
+        [...(curNotes || []), ...(prevNotes || [])].forEach(n => {
+            const t = n.title || '';
+            if (t && !seen.has(t)) { seen.add(t); titles.push(t); }
+        });
+        const totalFor = (n) => {
+            if (!n) return 0;
+            const tbl = n.table || [];
+            if (tbl.length > 0) {
+                for (const row of tbl) {
+                    if (String(row.label || '').includes('الرصيد')) return row.amount || 0;
+                }
+                return tbl[0].amount || 0;
+            }
+            return (n.accounts || []).reduce((s, a) => s + (a.amount || 0), 0);
+        };
+        const bodyOf = (n) => (n && n.body) ? n.body : '';
+        const rows = [];
+        titles.forEach((title, idx) => {
+            const cn = (curNotes || []).find(n => n.title === title);
+            const pn = prevMap[title];
+            const curTotal = totalFor(cn);
+            const prevTotal = totalFor(pn);
+            rows.push({
+                number: idx + 1,
+                title: title,
+                body: bodyOf(cn) || bodyOf(pn),
+                current_accounts: (cn || {}).accounts || [],
+                previous_accounts: (pn || {}).accounts || [],
+                current_total: curTotal,
+                previous_total: prevTotal,
+                diff: curTotal - prevTotal,
+            });
+        });
+        return rows;
+    }
+
     function renderComparisonTable(currentRes, previousRes) {
         const resultArea = $('#comparison-result-area');
         resultArea.innerHTML = '';
@@ -872,34 +966,22 @@ const App = (() => {
             ));
         });
 
-        // قسم الإيضاحات المفصّلة (رقم + عنوان + الفترة + الرصيد + الوصف + الحسابات)
+        // قسم الإيضاحات المفصّلة (كارت لكل إيضاح بمقارنة فترتين)
         const curNotes = currentRes.notes || [];
         const prevNotes = previousRes.notes || [];
-        const noteRows = _buildNoteRows(curNotes, prevNotes);
-        if (noteRows.length > 0) {
-            const noteTable = el('table', { class: 'tb-table', style: 'width:100%;font-size:12px;' },
-                el('thead', {}, el('tr', {},
-                    el('th', { style: 'text-align:center;width:50px;' }, 'رقم'),
-                    el('th', { style: 'text-align:right;' }, 'عنوان الإيضاح'),
-                    el('th', { style: 'text-align:center;width:110px;' }, 'الفترة'),
-                    el('th', { style: 'text-align:left;width:130px;' }, 'الرصيد'),
-                    el('th', { style: 'text-align:right;' }, 'الوصف'),
-                    el('th', { style: 'text-align:right;' }, 'الحسابات'))),
-                el('tbody', {}, ...noteRows.map(r =>
-                    el('tr', { style: (r.num % 2 === 0) ? 'background:#f8fafc;' : '' },
-                        el('td', { style: 'text-align:center;font-weight:700;color:#1e40af;' }, String(r.num)),
-                        el('td', { style: 'text-align:right;font-weight:600;color:#1e3a8a;' }, r.title),
-                        el('td', { style: 'text-align:center;color:' + (r.period === 'الفترة الحالية' ? '#15803d' : '#6b7280') + ';' }, r.period),
-                        el('td', { style: 'text-align:left;font-family:monospace;font-weight:600;' }, fmt(r.total)),
-                        el('td', { style: 'text-align:right;color:#475569;font-size:11px;' }, r.body),
-                        el('td', { style: 'text-align:right;color:#334155;font-size:11px;font-family:monospace;' }, r.accounts)
-                    )
-                ))
+        const detailedNotes = _buildDetailedNoteRows(curNotes, prevNotes);
+        if (detailedNotes.length > 0) {
+            // عنوان القسم
+            const notesWrapper = el('div', { style: 'background:linear-gradient(135deg,#1e3a8a 0%,#1e40af 100%);color:#fff;padding:16px 20px;border-radius:10px;margin-bottom:16px;' },
+                el('div', { style: 'font-size:18px;font-weight:700;' }, 'الإيضاحات المرفقة مع القوائم المالية - مقارنة الفترتين'),
+                el('div', { style: 'font-size:12px;opacity:0.85;margin-top:4px;' }, 'كل إيضاح بالتفاصيل الكاملة: الفترة الحالية، الفترة السابقة، والفرق')
             );
-            wrapper.appendChild(el('div', { style: 'background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);' },
-                el('h3', { style: 'margin:0 0 16px;color:#1e40af;font-size:16px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;' }, 'الإيضاحات - تفاصيل المقارنة'),
-                noteTable
-            ));
+            wrapper.appendChild(notesWrapper);
+            const periodCurrent = currentRes.period || 'الحالية';
+            const periodPrior = previousRes.period || 'السابقة';
+            detailedNotes.forEach(note => {
+                wrapper.appendChild(_renderDetailedNoteCard(note, periodCurrent, periodPrior));
+            });
         }
 
         resultArea.appendChild(wrapper);

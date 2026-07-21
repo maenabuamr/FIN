@@ -567,3 +567,179 @@ def export_comparison_excel(
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out)
     return str(out)
+
+
+def export_notes_comparison_sheet(wb, detailed_notes: list[dict], period_current: str = "", period_prior: str = ""):
+    """
+    بناء ورقة "الإيضاحات المرفقة" في workbook موجود.
+    كل إيضاح يأخذ قسم كامل:
+      - عنوان برقم تسلسلي
+      - وصف
+      - جدول الفترة الحالية (الحساب | الرمز | المبلغ) مع المجموع
+      - جدول الفترة السابقة (الحساب | الرمز | المبلغ) مع المجموع
+      - صف الفرق
+    """
+    from openpyxl.styles import Font, PatternFill, Alignment
+    ws = wb.create_sheet("الإيضاحات المرفقة")
+
+    bold = Font(name="Calibri", size=12, bold=True, color="FFFFFF")
+    title_font = Font(name="Calibri", size=14, bold=True, color="1E40AF")
+    body_font = Font(name="Calibri", size=10, italic=True, color="6B7280")
+    header_fill = PatternFill("solid", fgColor="1E3A8A")
+    current_fill = PatternFill("solid", fgColor="DBEAFE")
+    prev_fill = PatternFill("solid", fgColor="FEF3C7")
+    diff_fill = PatternFill("solid", fgColor="E0E7FF")
+    total_fill = PatternFill("solid", fgColor="F1F5F9")
+    center = Alignment(horizontal="center", vertical="center", readingOrder=2)
+    right = Alignment(horizontal="right", vertical="center", readingOrder=2, wrap_text=True)
+    left = Alignment(horizontal="left", vertical="center")
+
+    # عناوين الأعمدة
+    headers = ["الحساب", "الرمز", "المبلغ"]
+    col_widths = [55, 18, 18]
+
+    for col, w in enumerate(col_widths, 1):
+        ws.column_dimensions[chr(64 + col)].width = w
+
+    row = 1
+    for note in detailed_notes:
+        # 1) عنوان الإيضاح: "1 - النقدية وما في حكمها"
+        ws.cell(row=row, column=1, value=f'{note.get("number", "")} - {note.get("title", "")}')
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+        cell = ws.cell(row=row, column=1)
+        cell.font = title_font
+        cell.alignment = right
+        cell.fill = total_fill
+        ws.row_dimensions[row].height = 22
+        row += 1
+
+        # 2) الوصف
+        body = note.get("body", "")
+        if body:
+            ws.cell(row=row, column=1, value=body)
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+            cell = ws.cell(row=row, column=1)
+            cell.font = body_font
+            cell.alignment = right
+            ws.row_dimensions[row].height = 30
+            row += 1
+
+        # 3) رأس الفترة الحالية
+        period_label = f"الفترة الحالية ({period_current})" if period_current else "الفترة الحالية"
+        ws.cell(row=row, column=1, value=period_label)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+        cell = ws.cell(row=row, column=1)
+        cell.font = Font(name="Calibri", size=11, bold=True, color="1E40AF")
+        cell.alignment = right
+        cell.fill = current_fill
+        row += 1
+
+        # 4) جدول الفترة الحالية
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=row, column=col, value=h)
+            cell.font = bold
+            cell.fill = header_fill
+            cell.alignment = center
+        row += 1
+
+        cur_accounts = note.get("current_accounts", [])
+        for a in cur_accounts:
+            ws.cell(row=row, column=1, value=a.get("name", ""))
+            ws.cell(row=row, column=2, value=str(a.get("code", "")))
+            amt = a.get("amount", 0) or 0
+            c = ws.cell(row=row, column=3, value=amt)
+            c.number_format = "#,##0.00;(#,##0.00)"
+            c.alignment = left
+            c.font = Font(name="Calibri", size=10, color="DC2626" if amt < 0 else "0F172A")
+            ws.cell(row=row, column=1).alignment = right
+            ws.cell(row=row, column=2).alignment = Alignment(horizontal="center", readingOrder=2)
+            row += 1
+        if not cur_accounts:
+            ws.cell(row=row, column=1, value="— لا توجد حسابات —")
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+            ws.cell(row=row, column=1).alignment = center
+            ws.cell(row=row, column=1).font = body_font
+            row += 1
+
+        # 5) مجموع الفترة الحالية
+        ws.cell(row=row, column=1, value="المجموع")
+        ws.cell(row=row, column=1).font = Font(name="Calibri", size=11, bold=True)
+        ws.cell(row=row, column=1).alignment = right
+        ws.cell(row=row, column=1).fill = total_fill
+        c = ws.cell(row=row, column=3, value=note.get("current_total", 0))
+        c.font = Font(name="Calibri", size=11, bold=True, color="1E40AF")
+        c.number_format = "#,##0.00;(#,##0.00)"
+        c.alignment = left
+        c.fill = total_fill
+        ws.cell(row=row, column=2).fill = total_fill
+        row += 1
+
+        # 6) رأس الفترة السابقة
+        period_label2 = f"الفترة السابقة ({period_prior})" if period_prior else "الفترة السابقة"
+        ws.cell(row=row, column=1, value=period_label2)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+        cell = ws.cell(row=row, column=1)
+        cell.font = Font(name="Calibri", size=11, bold=True, color="92400E")
+        cell.alignment = right
+        cell.fill = prev_fill
+        row += 1
+
+        # 7) جدول الفترة السابقة
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=row, column=col, value=h)
+            cell.font = bold
+            cell.fill = header_fill
+            cell.alignment = center
+        row += 1
+
+        prev_accounts = note.get("previous_accounts", [])
+        for a in prev_accounts:
+            ws.cell(row=row, column=1, value=a.get("name", ""))
+            ws.cell(row=row, column=2, value=str(a.get("code", "")))
+            amt = a.get("amount", 0) or 0
+            c = ws.cell(row=row, column=3, value=amt)
+            c.number_format = "#,##0.00;(#,##0.00)"
+            c.alignment = left
+            c.font = Font(name="Calibri", size=10, color="DC2626" if amt < 0 else "0F172A")
+            ws.cell(row=row, column=1).alignment = right
+            ws.cell(row=row, column=2).alignment = Alignment(horizontal="center", readingOrder=2)
+            row += 1
+        if not prev_accounts:
+            ws.cell(row=row, column=1, value="— لا توجد حسابات —")
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+            ws.cell(row=row, column=1).alignment = center
+            ws.cell(row=row, column=1).font = body_font
+            row += 1
+
+        # 8) مجموع الفترة السابقة
+        ws.cell(row=row, column=1, value="المجموع")
+        ws.cell(row=row, column=1).font = Font(name="Calibri", size=11, bold=True)
+        ws.cell(row=row, column=1).alignment = right
+        ws.cell(row=row, column=1).fill = total_fill
+        c = ws.cell(row=row, column=3, value=note.get("previous_total", 0))
+        c.font = Font(name="Calibri", size=11, bold=True, color="92400E")
+        c.number_format = "#,##0.00;(#,##0.00)"
+        c.alignment = left
+        c.fill = total_fill
+        ws.cell(row=row, column=2).fill = total_fill
+        row += 1
+
+        # 9) صف الفرق
+        diff = note.get("diff", 0)
+        ws.cell(row=row, column=1, value="الفرق (الحالية - السابقة)")
+        ws.cell(row=row, column=1).font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        ws.cell(row=row, column=1).alignment = right
+        ws.cell(row=row, column=1).fill = PatternFill("solid", fgColor="1E40AF")
+        c = ws.cell(row=row, column=3, value=diff)
+        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        c.number_format = "#,##0.00;(#,##0.00)"
+        c.alignment = left
+        c.fill = PatternFill("solid", fgColor="1E40AF")
+        ws.cell(row=row, column=2).fill = PatternFill("solid", fgColor="1E40AF")
+        row += 1
+
+        # 10) سطر فاصل
+        row += 1
+
+    # 11) إضافة sheet في النهاية
+    return ws
