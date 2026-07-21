@@ -376,6 +376,27 @@ def delete_job(job_id: str, company_id: str = Query(...)):
     return {"ok": True}
 
 
+@app.post("/api/jobs/{job_id}/commit")
+def commit_job(job_id: str, company_id: str = Query(...)):
+    """Mark a draft job as committed (saved) so it appears in the main list."""
+    job = _load_job_scoped(company_id, job_id)
+    if job.get("status") in ("committed", "ready", "processed"):
+        return {"ok": True, "job_id": job_id, "status": job["status"]}
+    # need at least the statements to be considered "committed"
+    if not job.get("statements"):
+        # auto-process to generate statements
+        try:
+            process(job_id, company_id=company_id)
+        except HTTPException:
+            pass
+    job = _load_job_scoped(company_id, job_id)
+    job["status"] = "committed"
+    job["is_locked"] = True
+    job["committed_at"] = time.time()
+    store.save_job(company_id, job)
+    return {"ok": True, "job_id": job_id, "status": "committed"}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Accounts (editing trial balance)
 # ──────────────────────────────────────────────────────────────────────────────
