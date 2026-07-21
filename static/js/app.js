@@ -827,57 +827,96 @@ const App = (() => {
         return rows;
     }
 
-    function _renderDetailedNoteCard(note, periodCurrent, periodPrior) {
-        const card = el('div', { style: 'background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);' });
-        card.appendChild(el('div', { style: 'font-size:18px;font-weight:700;color:#1e40af;border-bottom:2px solid #1e40af;padding-bottom:10px;margin-bottom:12px;' }, (note.number || '') + ' - ' + (note.title || '')));
-        if (note.body) {
-            card.appendChild(el('div', { style: 'font-size:12px;color:#6b7280;font-style:italic;margin-bottom:14px;line-height:1.6;' }, note.body));
-        }
-        const curSec = el('div', { style: 'margin-bottom:16px;' });
-        curSec.appendChild(el('div', { style: 'background:#dbeafe;color:#1e40af;font-weight:700;padding:8px 12px;border-radius:6px 6px 0 0;font-size:13px;' }, 'الفترة الحالية (' + (periodCurrent || '') + ')'));
-        curSec.appendChild(_renderAccountsTable(note.current_accounts || [], note.current_total || 0, '#1e40af'));
-        card.appendChild(curSec);
-        const prevSec = el('div', { style: 'margin-bottom:16px;' });
-        prevSec.appendChild(el('div', { style: 'background:#fef3c7;color:#92400e;font-weight:700;padding:8px 12px;border-radius:6px 6px 0 0;font-size:13px;' }, 'الفترة السابقة (' + (periodPrior || '') + ')'));
-        prevSec.appendChild(_renderAccountsTable(note.previous_accounts || [], note.previous_total || 0, '#92400e'));
-        card.appendChild(prevSec);
-        const diff = note.diff || 0;
-        const diffBg = diff >= 0 ? '#dcfce7' : '#fee2e2';
-        const diffColor = diff >= 0 ? '#15803d' : '#dc2626';
-        const diffRow = el('div', { style: 'background:' + diffBg + ';border:1px solid ' + diffColor + ';color:' + diffColor + ';padding:10px 14px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;font-weight:700;' },
-            el('span', {}, 'الفرق (الحالية - السابقة)'),
-            el('span', { style: 'font-family:monospace;font-size:15px;' }, fmt(diff))
-        );
-        card.appendChild(diffRow);
-        return card;
-    }
     function _renderAccountsTable(accounts, total, totalColor) {
+        // 5 أعمدة: الحساب | الرمز | الحالية | السابقة | الفرق
         const table = el('table', { class: 'tb-table', style: 'width:100%;font-size:12px;border:1px solid #e5e7eb;border-top:none;border-collapse:collapse;' });
-        table.appendChild(el('thead', {}, el('tr', { style: 'background:#1e3a8a;color:#fff;' },
+        // header
+        const thead = el('thead', {}, el('tr', { style: 'background:#1e3a8a;color:#fff;' },
             el('th', { style: 'text-align:right;color:#fff;padding:8px;' }, 'الحساب'),
-            el('th', { style: 'text-align:center;color:#fff;padding:8px;width:120px;' }, 'الرمز'),
-            el('th', { style: 'text-align:left;color:#fff;padding:8px;width:130px;' }, 'المبلغ')
-        )));
+            el('th', { style: 'text-align:center;color:#fff;padding:8px;width:110px;' }, 'الرمز'),
+            el('th', { style: 'text-align:left;color:#fff;padding:8px;width:120px;background:#1e40af;' }, 'الفترة الحالية'),
+            el('th', { style: 'text-align:left;color:#fff;padding:8px;width:120px;background:#92400e;' }, 'الفترة السابقة'),
+            el('th', { style: 'text-align:left;color:#fff;padding:8px;width:110px;background:#15803d;' }, 'الفرق')
+        ));
+        table.appendChild(thead);
         const tbody = el('tbody', {});
         if (!accounts || accounts.length === 0) {
-            tbody.appendChild(el('tr', {}, el('td', { colspan: '3', style: 'text-align:center;color:#9ca3af;padding:14px;' }, '— لا توجد حسابات —')));
+            tbody.appendChild(el('tr', {}, el('td', { colspan: '5', style: 'text-align:center;color:#9ca3af;padding:14px;' }, '— لا توجد حسابات —')));
         } else {
             accounts.forEach(a => {
                 const amt = a.amount || 0;
+                const prev = a.prev_amount || 0;
+                const diff = amt - prev;
+                const diffColor = diff >= 0 ? '#15803d' : '#dc2626';
                 tbody.appendChild(el('tr', { style: 'border-bottom:1px solid #f1f5f9;' },
                     el('td', { style: 'text-align:right;padding:6px 10px;' }, a.name || ''),
                     el('td', { style: 'text-align:center;padding:6px;font-family:monospace;color:#475569;' }, String(a.code || '')),
-                    el('td', { style: 'text-align:left;padding:6px 10px;font-family:monospace;color:' + (amt < 0 ? '#dc2626' : '#0f172a') + ';font-weight:600;' }, fmt(amt))
+                    el('td', { style: 'text-align:left;padding:6px 10px;font-family:monospace;color:' + (amt < 0 ? '#dc2626' : '#0f172a') + ';font-weight:600;' }, fmt(amt)),
+                    el('td', { style: 'text-align:left;padding:6px 10px;font-family:monospace;color:' + (prev < 0 ? '#dc2626' : '#6b7280') + ';' }, fmt(prev)),
+                    el('td', { style: 'text-align:left;padding:6px 10px;font-family:monospace;font-weight:700;color:' + diffColor + ';' }, fmt(diff))
                 ));
             });
         }
-        tbody.appendChild(el('tr', { style: 'background:#f1f5f9;font-weight:700;' },
-            el('td', { style: 'text-align:right;padding:8px 10px;color:' + totalColor + ';' }, 'المجموع'),
+        // مجموع
+        tbody.appendChild(el('tr', { style: 'background:#f1f5f9;font-weight:700;border-top:2px solid #1e40af;' },
+            el('td', { style: 'text-align:right;padding:8px 10px;color:#1e40af;' }, 'المجموع'),
             el('td', { style: 'background:#f1f5f9;' }, ''),
-            el('td', { style: 'text-align:left;padding:8px 10px;font-family:monospace;color:' + totalColor + ';' }, fmt(total))
+            el('td', { style: 'text-align:left;padding:8px 10px;font-family:monospace;color:#1e40af;' }, fmt(total)),
+            el('td', { style: 'text-align:left;padding:8px 10px;font-family:monospace;color:#92400e;' }, fmt(total.prev_total || 0)),
+            el('td', { style: 'text-align:left;padding:8px 10px;font-family:monospace;color:#15803d;' }, fmt(total.diff || 0))
         ));
         table.appendChild(tbody);
         return table;
+    }
+    function _renderDetailedNoteCard(note, periodCurrent, periodPrior) {
+        // كارت إيضاح مفصّل مع جدول مقارنة 5 أعمدة
+        const card = el('div', { style: 'background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);' });
+        // العنوان
+        card.appendChild(el('div', { style: 'font-size:18px;font-weight:700;color:#1e40af;border-bottom:2px solid #1e40af;padding-bottom:10px;margin-bottom:12px;' }, (note.number || '') + ' - ' + (note.title || '')));
+        // الوصف
+        if (note.body) {
+            card.appendChild(el('div', { style: 'font-size:12px;color:#6b7280;font-style:italic;margin-bottom:14px;line-height:1.6;' }, note.body));
+        }
+        // بناء الحسابات مع المطابقة
+        const curMap = {};
+        (note.current_accounts || []).forEach(a => { curMap[String(a.code || '')] = a; });
+        const prevMap = {};
+        (note.previous_accounts || []).forEach(a => { prevMap[String(a.code || '')] = a; });
+        const allCodes = [];
+        const seen = new Set();
+        (note.current_accounts || []).forEach(a => {
+            const code = String(a.code || '');
+            if (code && !seen.has(code)) { seen.add(code); allCodes.push(code); }
+        });
+        (note.previous_accounts || []).forEach(a => {
+            const code = String(a.code || '');
+            if (code && !seen.has(code)) { seen.add(code); allCodes.push(code); }
+        });
+        // ترتيب حسب المبلغ الأكبر
+        allCodes.sort((c1, c2) => {
+            const a1 = Math.max(Math.abs((curMap[c1] || {}).amount || 0), Math.abs((prevMap[c1] || {}).amount || 0));
+            const a2 = Math.max(Math.abs((curMap[c2] || {}).amount || 0), Math.abs((prevMap[c2] || {}).amount || 0));
+            return a2 - a1;
+        });
+        const mergedAccounts = allCodes.map(code => {
+            const c = curMap[code] || { code, name: '' };
+            const p = prevMap[code] || { code, name: '', amount: 0 };
+            return {
+                code: code,
+                name: c.name || p.name || '',
+                amount: c.amount || 0,
+                prev_amount: p.amount || 0,
+            };
+        });
+        // sub-header صغير
+        const subHeader = el('div', { style: 'display:flex;gap:8px;margin-bottom:8px;font-size:11px;color:#475569;' },
+            el('span', { style: 'background:#dbeafe;color:#1e40af;padding:3px 10px;border-radius:10px;font-weight:600;' }, '📅 الحالية: ' + (periodCurrent || '—')),
+            el('span', { style: 'background:#fef3c7;color:#92400e;padding:3px 10px;border-radius:10px;font-weight:600;' }, '📅 السابقة: ' + (periodPrior || '—'))
+        );
+        card.appendChild(subHeader);
+        // الجدول
+        card.appendChild(_renderAccountsTable(mergedAccounts, note.current_total || 0, '#1e40af'));
+        return card;
     }
 
     function _buildDetailedNoteRows(curNotes, prevNotes) {
