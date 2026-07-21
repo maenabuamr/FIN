@@ -560,6 +560,7 @@ def get_statements(job_id: str, company_id: str = Query(...)):
         "currency": job.get("currency"),
         "statements": job["statements"],
         "totals": {k: s["totals"] for k, s in job["statements"].items()},
+        "notes": job.get("notes", []),
     }
 
 
@@ -702,7 +703,7 @@ if __name__ == "__main__":
 
 
 def _build_comparison_data(current_job, previous_job):
-    """تحويل jobs إلى structure يطابق توقيع export_comparison_excel الأصلي."""
+    """تحويل jobs إلى structure يطابق توقيع export_comparison_excel الأصلي + الإيضاحات."""
     cur_stmts = current_job.get("statements", {}) or {}
     prev_stmts = previous_job.get("statements", {}) or {}
     
@@ -728,6 +729,38 @@ def _build_comparison_data(current_job, previous_job):
             })
         if rows:
             comparisons[key] = rows
+    
+    # إيضاحات المقارنة
+    cur_notes = current_job.get("notes", []) or []
+    prev_notes = previous_job.get("notes", []) or []
+    prev_note_map = {n.get("title", ""): n for n in prev_notes}
+    all_note_titles = list(dict.fromkeys(
+        [n.get("title", "") for n in cur_notes] +
+        [n.get("title", "") for n in prev_notes]
+    ))
+    note_rows = []
+    for title in all_note_titles:
+        cn = next((n for n in cur_notes if n.get("title", "") == title), None)
+        pn = prev_note_map.get(title)
+        # الرصيد الكلي من table أو مجموع accounts
+        def _total(n):
+            if not n: return 0
+            tbl = n.get("table") or []
+            if tbl:
+                # أول صف "الرصيد في نهاية الفترة"
+                for row in tbl:
+                    if "الرصيد" in str(row.get("label", "")):
+                        return row.get("amount", 0) or 0
+                return tbl[0].get("amount", 0) or 0
+            accs = n.get("accounts") or []
+            return sum((a.get("amount", 0) or 0) for a in accs)
+        note_rows.append({
+            "label": title,
+            "current": _total(cn),
+            "prior": _total(pn) if pn else 0,
+        })
+    if note_rows:
+        comparisons["__notes__"] = note_rows
     
     kpis = []
     cur_totals = current_job.get("totals", {}) or {}

@@ -488,6 +488,7 @@ def export_comparison_excel(
         "income_statement": "الدخل - مقارنة",
         "cash_flow": "التدفقات النقدية - مقارنة",
         "equity": "حقوق الملكية - مقارنة",
+        "__notes__": "الإيضاحات - مقارنة",
     }
     for key, rows in comparisons.items():
         ws = wb.create_sheet(titles.get(key, key)[:31])
