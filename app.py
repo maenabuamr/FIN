@@ -39,8 +39,11 @@ from core.validator import validate_trial_balance
 # ──────────────────────────────────────────────────────────────────────────────
 
 BASE = Path(__file__).parent
-UPLOAD_DIR = BASE / "uploads"
-OUTPUT_DIR = BASE / "outputs"
+DATA_DIR = BASE / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+# IMPORTANT: keep uploads/outputs inside data/ so they persist on Render's persistent disk
+UPLOAD_DIR = DATA_DIR / "uploads"
+OUTPUT_DIR = DATA_DIR / "outputs"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
