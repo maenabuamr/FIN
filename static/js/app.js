@@ -331,6 +331,11 @@ const App = (() => {
         } catch (e) { toast('فشل الرفع: ' + e.message, 'error'); }
     }
     
+    async function unlockJob(jobId) {
+        if (!confirm('هل تريد فتح الميزان للتعديل؟')) return;
+        try { await api(`/api/jobs/${jobId}/unlock`, { method: 'POST' }); toast('🔓 تم فتح الميزان', 'success'); await renderEditor(); } catch (e) { toast('خطأ: ' + e.message, 'error'); }
+    }
+
     async function commitJob(jobId) {
         if (!confirm('هل تريد حفظ هذا الميزان نهائياً؟')) return;
         try { await api(`/api/jobs/${jobId}/commit`, { method: 'POST' }); toast('✅ تم الحفظ بنجاح', 'success'); await renderTrialBalance(); } catch (e) { toast('خطأ في الحفظ: ' + e.message, 'error'); }
@@ -369,7 +374,7 @@ const App = (() => {
                     el('div', {}, el('h2', { style: 'margin:0;' }, isDraft ? '📝 مراجعة وتعديل المسودة' : '✅ تفاصيل الميزان المختار'), el('div', { style: 'font-size:13px;color:#6b7280;margin-top:4px;' }, job.filename || '')),
                     el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;' },
                         el('button', { class: 'btn btn-outline', onClick: processJob }, '⚙️ توليد القوائم المالية'),
-                        isDraft ? el('button', { class: 'btn btn-primary', onClick: () => commitJob(state.currentJob) }, '💾 حفظ نهائي') : el('span', { class: 'tag green' }, '✓ محفوظ'))),
+                        isDraft ? el('button', { class: 'btn btn-primary', onClick: () => commitJob(state.currentJob) }, '💾 حفظ نهائي') : el('div', { style: 'display:flex;gap:8px;align-items:center;' }, el('span', { class: 'tag green' }, '✓ محفوظ'), el('button', { class: 'btn btn-outline', style: 'background:#fef3c7;color:#92400e;', onClick: () => unlockJob(state.currentJob) }, '🔓 فتح للتعديل'))),
                 // شريط أدوات التصنيف الذكي
                 el('div', { style: 'background:linear-gradient(90deg,#eff6ff 0%,#dbeafe 100%);border:1px solid #93c5fd;border-radius:8px;padding:12px 16px;margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;' },
                     el('span', { style: 'font-weight:700;color:#1e40af;font-size:13px;' }, '💼 التصنيف الذكي:'),
@@ -378,7 +383,7 @@ const App = (() => {
                     el('button', { class: 'btn btn-outline', style: 'padding:6px 14px;font-size:13px;background:#fff;', onClick: () => autoTagIntercompany() }, '🔗 كشف تلقائي للبنوك البينية'),
                     el('span', { id: 'profile-status', style: 'margin-right:auto;font-size:12px;color:#6b7280;' })
                 ),
-                table));
+                table)));
         } catch (e) { main.innerHTML = `<div class="empty">خطأ في التحميل: ${e.message}</div>`; }
     }
 

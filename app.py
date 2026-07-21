@@ -1381,3 +1381,16 @@ def add_manual_elimination(group_id: str, payload: dict):
             "diff": 0.0,
         })
     return JSONResponse(content={"transactions": transactions, "ok": True})
+
+
+# ===== فتح الميزان للتعديل (Unlock for editing) =====
+@app.post("/api/jobs/{job_id}/unlock")
+def unlock_job(job_id, company_id=Query(...)):
+    """فتح ميزان محفوظ لتعديل التصنيفات"""
+    job = _load_job_scoped(company_id, job_id)
+    if not job:
+        raise HTTPException(404, "الميزان غير موجود")
+    job["is_locked"] = False
+    job["status"] = "uploaded"
+    store.save_job(company_id, job)
+    return {"ok": True, "job_id": job_id, "status": "uploaded", "message": "تم فتح الميزان للتعديل"}
