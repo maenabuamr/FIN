@@ -204,3 +204,111 @@ def save_profile(company_id, profile):
     p = _profile_path(company_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Consolidation Groups (IFRS 10)
+# ──────────────────────────────────────────────────────────────────────────────
+
+GROUPS_DIR = DATA / "groups"
+
+
+def _group_path(group_id: str) -> Path:
+    return GROUPS_DIR / f"{group_id}.json"
+
+
+def list_groups() -> list[dict]:
+    """Return all consolidation groups, newest first."""
+    if not GROUPS_DIR.exists():
+        return []
+    out = []
+    for p in GROUPS_DIR.glob("*.json"):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            out.append(data)
+        except Exception:
+            pass
+    out.sort(key=lambda g: g.get("created_at", 0), reverse=True)
+    return out
+
+
+def get_group(group_id: str) -> dict:
+    p = _group_path(group_id)
+    if not p.exists():
+        raise KeyError(f"group not found: {group_id}")
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def create_group(name: str, parent_company_id: str, notes: str = "") -> dict:
+    """Create a new consolidation group with one link (the parent at 100%)."""
+    group_id = "grp_" + uuid.uuid4().hex[:10]
+    now = time.time()
+    group = {
+        "id": group_id,
+        "name": name,
+        "parent_company_id": parent_company_id,
+        "notes": notes,
+        "created_at": now,
+        "links": [
+            {
+                "company_id": parent_company_id,
+                "parent_company_id": parent_company_id,
+                "ownership_pct": 100.0,
+                "consolidation_method": "full",
+            }
+        ],
+    }
+    GROUPS_DIR.mkdir(parents=True, exist_ok=True)
+    _group_path(group_id).write_text(
+        json.dumps(group, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return group
+
+
+def add_company_to_group(
+    group_id: str,
+    company_id: str,
+    ownership_pct: float,
+    consolidation_method: str = "full",
+) -> dict:
+    """Add a subsidiary to a group with a given ownership percentage."""
+    group = get_group(group_id)
+    parent_id = group.get("parent_company_id")
+    # Replace if already exists
+    group["links"] = [l for l in group.get("links", []) if l.get("company_id") != company_id]
+    group["links"].append({
+        "company_id": company_id,
+        "parent_company_id": parent_id,
+        "ownership_pct": float(ownership_pct),
+        "consolidation_method": consolidation_method,
+    })
+    _group_path(group_id).write_text(
+        json.dumps(group, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return group
+
+
+def remove_company_from_group(group_id: str, company_id: str) -> dict:
+    group = get_group(group_id)
+    group["links"] = [l for l in group.get("links", []) if l.get("company_id") != company_id]
+    _group_path(group_id).write_text(
+        json.dumps(group, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return group
+
+
+def update_group(group_id: str, **fields) -> dict:
+    group = get_group(group_id)
+    for k, v in fields.items():
+        if v is not None:
+            group[k] = v
+    _group_path(group_id).write_text(
+        json.dumps(group, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return group
+
+
+def delete_group(group_id: str) -> None:
+    p = _group_path(group_id)
+    if p.exists():
+        p.unlink()

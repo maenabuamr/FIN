@@ -55,6 +55,7 @@ const App = (() => {
             { key: 'financial_analysis', label: 'تحليل مالي', icon: '📈' },
             { key: 'attachments', label: 'مرفقات المستندات', icon: '📎' },
             { key: 'compare', label: 'المقارنات المالية', icon: '⇄' },
+            { key: 'consolidation', label: 'القوائم الموحدة (IFRS 10)', icon: '🏢' },
         ];
         const sec = $('#nav-section');
         if (!sec) return;
@@ -84,7 +85,8 @@ const App = (() => {
             notes: 'الإيضاحات', 
             financial_analysis: 'التحليل المالي الشامل', 
             attachments: 'مرفقات الملفات والمستندات', 
-            compare: 'مقارنة الفترات المالية' 
+            compare: 'مقارنة الفترات المالية',
+            consolidation: 'القوائم المالية الموحدة' 
         };
         const tb = $('.topbar');
         if (!tb) return;
@@ -107,6 +109,7 @@ const App = (() => {
         else if (view === 'financial_analysis') await renderFinancialAnalysis();
         else if (view === 'attachments') await renderAttachments();
         else if (view === 'compare') await renderCompare();
+        else if (view === 'consolidation') await renderConsolidation();
     }
     
     function goBack() {
@@ -1131,6 +1134,350 @@ const App = (() => {
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
             toast('✅ تم تصدير المقارنة إلى Excel بنجاح (' + selectedTitles.length + '/' + allTitles.length + ' إيضاح)', 'success');
+        } catch (e) { toast('فشل التصدير: ' + e.message, 'error'); }
+    }
+
+    async function renderConsolidation() {
+        const main = $('#main-content');
+        if (!main) return;
+        main.innerHTML = '';
+
+        const container = el('div', { class: 'section' },
+            el('div', { class: 'section-header' },
+                el('div', null,
+                    el('h2', { style: 'margin:0;' }, '🏢 القوائم المالية الموحدة (IFRS 10)'),
+                    el('div', { style: 'font-size:13px;color:#6b7280;margin-top:4px;' }, 'تجميع موازين الشركات التابعة، حساب NCI، واستبعاد المعاملات البينية'))
+            )
+        );
+
+        // بطاقات الإحصائيات
+        const statsRow = el('div', { id: 'cons-stats', style: 'display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-top:20px;' });
+        container.appendChild(statsRow);
+
+        // بطاقة إنشاء مجموعة جديدة
+        const createCard = el('div', { style: 'background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px;margin-top:20px;' },
+            el('h3', { style: 'margin-top:0;color:#1e40af;font-size:18px;' }, '➕ إنشاء مجموعة جديدة'),
+            el('div', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;' },
+                el('div', null,
+                    el('label', { style: 'display:block;margin-bottom:4px;font-size:13px;' }, 'اسم المجموعة *'),
+                    el('input', { type: 'text', id: 'new-group-name', placeholder: 'مثال: مجموعة بهاء الدين', style: 'width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;' })
+                ),
+                el('div', null,
+                    el('label', { style: 'display:block;margin-bottom:4px;font-size:13px;' }, 'الشركة الأم *'),
+                    el('select', { id: 'new-group-parent', style: 'width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;' },
+                        el('option', { value: '' }, '-- اختر الشركة الأم --'))
+                )
+            ),
+            el('button', { class: 'btn btn-primary', style: 'margin-top:12px;padding:10px 20px;', onClick: createNewGroup }, 'إنشاء مجموعة')
+        );
+        container.appendChild(createCard);
+
+        // قائمة المجموعات
+        const groupsCard = el('div', { style: 'background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px;margin-top:20px;' },
+            el('h3', { style: 'margin-top:0;color:#1e40af;font-size:18px;' }, '📋 المجموعات المحفوظة')
+        );
+        const groupsList = el('div', { id: 'groups-list' });
+        groupsCard.appendChild(groupsList);
+        container.appendChild(groupsCard);
+
+        // مساحة عرض القوائم الموحدة
+        const resultArea = el('div', { id: 'consolidation-result-area', style: 'margin-top:20px;' });
+        container.appendChild(resultArea);
+
+        main.appendChild(container);
+
+        // تحميل البيانات
+        await _loadCompaniesForConsolidation();
+        await _loadGroupsList();
+    }
+
+    async function _loadCompaniesForConsolidation() {
+        try {
+            const r = await fetch('/api/companies');
+            if (!r.ok) return;
+            const data = await r.json();
+            const sel = $('#new-group-parent');
+            if (sel) {
+                sel.innerHTML = '<option value="">-- اختر الشركة الأم --</option>' +
+                    (data.companies || []).map(c => '<option value="' + c.id + '">' + c.name + '</option>').join('');
+            }
+        } catch (e) {}
+    }
+
+    async function _loadGroupsList() {
+        const list = $('#groups-list');
+        if (!list) return;
+        list.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af;">⏳ جاري التحميل...</div>';
+        try {
+            const r = await api('/api/groups');
+            const groups = r.groups || [];
+            if (groups.length === 0) {
+                list.innerHTML = '<div style="text-align:center;padding:24px;background:#f9fafb;border-radius:8px;color:#6b7280;">لا توجد مجموعات محفوظة. أنشئ مجموعة جديدة بالأعلى.</div>';
+                $('#cons-stats').innerHTML = '<div style="background:#f3f4f6;padding:16px;border-radius:8px;text-align:center;color:#6b7280;">لا توجد مجموعات بعد</div>';
+                return;
+            }
+            $('#cons-stats').innerHTML = '<div style="background:linear-gradient(135deg,#1e3a8a,#1e40af);color:#fff;padding:20px;border-radius:10px;text-align:center;"><div style="font-size:32px;font-weight:700;">' + groups.length + '</div><div style="font-size:13px;opacity:0.85;">مجموعة محفوظة</div></div>';
+            list.innerHTML = '';
+            groups.forEach(g => {
+                const companiesText = (g.links || []).map(l => l.company_id).join('، ');
+                const card = el('div', { style: 'background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:8px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;' },
+                    el('div', { style: 'flex:1;min-width:200px;' },
+                        el('div', { style: 'font-weight:700;color:#1e3a8a;font-size:15px;' }, '🏢 ' + g.name),
+                        el('div', { style: 'font-size:12px;color:#6b7280;margin-top:4px;' }, 'الشركة الأم: ' + g.parent_company_id + ' • ' + (g.links || []).length + ' شركة')
+                    ),
+                    el('div', { style: 'display:flex;gap:6px;' },
+                        el('button', { class: 'btn btn-primary', style: 'padding:6px 12px;font-size:13px;', onClick: () => openGroupDetail(g.id) }, '⚙️ إدارة / عرض'),
+                        el('button', { class: 'btn btn-outline', style: 'padding:6px 12px;font-size:13px;color:#dc2626;', onClick: () => removeGroup(g.id) }, '🗑')
+                    )
+                );
+                list.appendChild(card);
+            });
+        } catch (e) {
+            list.innerHTML = '<div style="color:#dc2626;">خطأ: ' + e.message + '</div>';
+        }
+    }
+
+    async function createNewGroup() {
+        const name = ($('#new-group-name').value || '').trim();
+        const parent = $('#new-group-parent').value;
+        if (!name) { toast('الاسم مطلوب', 'warn'); return; }
+        if (!parent) { toast('اختر الشركة الأم', 'warn'); return; }
+        try {
+            const r = await fetch('/api/groups', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, parent_company_id: parent })
+            });
+            if (!r.ok) { const t = await r.text(); throw new Error(t || r.statusText); }
+            const g = await r.json();
+            toast('✅ تم إنشاء المجموعة: ' + g.name, 'success');
+            $('#new-group-name').value = '';
+            await _loadGroupsList();
+            openGroupDetail(g.id);
+        } catch (e) { toast('خطأ: ' + e.message, 'error'); }
+    }
+
+    async function removeGroup(groupId) {
+        if (!confirm('هل تريد حذف هذه المجموعة نهائياً؟')) return;
+        try {
+            await api('/api/groups/' + groupId, { method: 'DELETE' });
+            toast('تم الحذف', 'success');
+            await _loadGroupsList();
+        } catch (e) { toast('خطأ: ' + e.message, 'error'); }
+    }
+
+    async function openGroupDetail(groupId) {
+        const area = $('#consolidation-result-area');
+        area.innerHTML = '<div style="text-align:center;padding:24px;color:#6b7280;">⏳ جاري التحميل...</div>';
+        try {
+            const r = await api('/api/groups/' + groupId);
+            const g = r;
+            area.innerHTML = '';
+            const detail = el('div', { style: 'background:linear-gradient(135deg,#1e3a8a,#1e40af);color:#fff;padding:20px;border-radius:12px;margin-bottom:16px;' },
+                el('div', { style: 'font-size:22px;font-weight:700;' }, '🏢 ' + g.name),
+                el('div', { style: 'font-size:13px;opacity:0.85;margin-top:4px;' }, 'الشركة الأم: ' + (g.parent_company_name || g.parent_company_id))
+            );
+            area.appendChild(detail);
+
+            // بطاقة الشركات التابعة
+            const subsCard = el('div', { style: 'background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:18px;margin-bottom:16px;' },
+                el('h3', { style: 'margin:0 0 12px;color:#1e40af;font-size:16px;' }, '🏭 الشركات المدرجة في التجميع')
+            );
+            const subsTable = el('table', { class: 'tb-table' },
+                el('thead', {}, el('tr', {},
+                    el('th', {}, 'الشركة'),
+                    el('th', { style: 'text-align:center;' }, 'نسبة الملكية'),
+                    el('th', { style: 'text-align:center;' }, 'طريقة التجميع'),
+                    el('th', { style: 'text-align:center;' }, 'إجراء')
+                )),
+                el('tbody', {})
+            );
+            const tbody = subsTable.querySelector('tbody');
+            (g.links || []).forEach(l => {
+                const row = el('tr', {},
+                    el('td', {}, l.company_name + (l.company_id === g.parent_company_id ? ' ⭐ (الأم)' : '')),
+                    el('td', { style: 'text-align:center;font-weight:600;color:#1e40af;' }, l.ownership_pct.toFixed(1) + '%'),
+                    el('td', { style: 'text-align:center;' }, l.consolidation_method === 'full' ? 'تجميع كامل' : (l.consolidation_method === 'proportional' ? 'تجميع نسبي' : 'حقوق ملكية')),
+                    el('td', { style: 'text-align:center;' },
+                        l.company_id === g.parent_company_id ? '—' :
+                        el('button', { class: 'btn-icon', onClick: () => removeSubsidiary(g.id, l.company_id) }, '🗑')
+                    )
+                );
+                tbody.appendChild(row);
+            });
+            subsCard.appendChild(subsTable);
+
+            // نموذج إضافة شركة تابعة
+            const addForm = el('div', { style: 'margin-top:12px;background:#f9fafb;padding:12px;border-radius:8px;display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;align-items:end;' },
+                el('div', null,
+                    el('label', { style: 'display:block;margin-bottom:4px;font-size:12px;' }, 'شركة تابعة'),
+                    el('select', { id: 'add-sub-sel', style: 'width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;background:#fff;' })
+                ),
+                el('div', null,
+                    el('label', { style: 'display:block;margin-bottom:4px;font-size:12px;' }, 'نسبة الملكية %'),
+                    el('input', { type: 'number', id: 'add-sub-pct', min: '0', max: '100', step: '0.01', value: '60', style: 'width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;' })
+                ),
+                el('div', null,
+                    el('label', { style: 'display:block;margin-bottom:4px;font-size:12px;' }, 'الطريقة'),
+                    el('select', { id: 'add-sub-method', style: 'width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;background:#fff;' },
+                        el('option', { value: 'full' }, 'تجميع كامل'),
+                        el('option', { value: 'proportional' }, 'تجميع نسبي'),
+                        el('option', { value: 'equity' }, 'حقوق ملكية')
+                    )
+                ),
+                el('button', { class: 'btn btn-primary', onClick: () => addSubsidiary(g.id), style: 'padding:8px 14px;' }, '➕ إضافة')
+            );
+            subsCard.appendChild(addForm);
+            area.appendChild(subsCard);
+
+            // شريط أفعال: توليد + تصدير
+            const actionBar = el('div', { style: 'background:#eff6ff;border:1px solid #93c5fd;border-radius:10px;padding:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px;' },
+                el('button', { class: 'btn btn-primary', style: 'padding:10px 20px;font-size:14px;', onClick: () => generateConsolidated(g.id) }, '📊 توليد القوائم الموحدة'),
+                el('button', { class: 'btn btn-outline', style: 'padding:10px 20px;font-size:14px;background:#fff;', onClick: () => exportConsolidated(g.id) }, '📥 تصدير Excel')
+            );
+            area.appendChild(actionBar);
+
+            // حاوية النتائج
+            const consRes = el('div', { id: 'cons-res-area' });
+            area.appendChild(consRes);
+
+            // تحميل الشركات للإضافة
+            try {
+                const cr = await api('/api/companies');
+                const comps = (cr.companies || []).filter(c => c.id !== g.parent_company_id && !(g.links || []).some(l => l.company_id === c.id));
+                const sel = $('#add-sub-sel');
+                if (sel) {
+                    sel.innerHTML = '<option value="">-- اختر شركة تابعة --</option>' +
+                        comps.map(c => '<option value="' + c.id + '">' + c.name + '</option>').join('');
+                }
+            } catch (e) {}
+        } catch (e) {
+            area.innerHTML = '<div style="color:#dc2626;">خطأ: ' + e.message + '</div>';
+        }
+    }
+
+    async function addSubsidiary(groupId) {
+        const companyId = $('#add-sub-sel').value;
+        const pct = parseFloat($('#add-sub-pct').value || '0');
+        const method = $('#add-sub-method').value;
+        if (!companyId) { toast('اختر شركة', 'warn'); return; }
+        if (pct <= 0 || pct > 100) { toast('نسبة غير صحيحة', 'warn'); return; }
+        try {
+            await api('/api/groups/' + groupId + '/add-company', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ company_id: companyId, ownership_pct: pct, consolidation_method: method })
+            });
+            toast('✅ تمت الإضافة', 'success');
+            openGroupDetail(groupId);
+        } catch (e) { toast('خطأ: ' + e.message, 'error'); }
+    }
+
+    async function removeSubsidiary(groupId, companyId) {
+        if (!confirm('حذف هذه الشركة من المجموعة؟')) return;
+        try {
+            await api('/api/groups/' + groupId + '/remove-company', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ company_id: companyId })
+            });
+            toast('تم الحذف', 'success');
+            openGroupDetail(groupId);
+        } catch (e) { toast('خطأ: ' + e.message, 'error'); }
+    }
+
+    async function generateConsolidated(groupId) {
+        const res = $('#cons-res-area');
+        if (!res) return;
+        res.innerHTML = '<div style="text-align:center;padding:24px;color:#1e40af;">⏳ جاري توليد القوائم الموحدة...</div>';
+        try {
+            const r = await api('/api/groups/' + groupId + '/consolidate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            renderConsolidatedStatements(r);
+            toast('✅ تم توليد القوائم الموحدة', 'success');
+        } catch (e) {
+            res.innerHTML = '<div style="background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;padding:14px;border-radius:8px;">⚠️ ' + e.message + '</div>';
+            toast('فشل التوليد: ' + e.message, 'error');
+        }
+    }
+
+    function renderConsolidatedStatements(c) {
+        const res = $('#cons-res-area');
+        res.innerHTML = '';
+        // ملخص NCI
+        const nci = c.nci || {};
+        const nciCard = el('div', { style: 'background:linear-gradient(135deg,#fef3c7,#fde68a);border:1px solid #fcd34d;border-radius:10px;padding:16px;margin-bottom:16px;' },
+            el('div', { style: 'font-size:14px;color:#92400e;font-weight:700;margin-bottom:8px;' }, '📊 الحصص غير المسيطر عليها (NCI)'),
+            el('div', { style: 'display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;' },
+                el('div', { style: 'background:#fff;padding:10px;border-radius:6px;' }, el('div', { style: 'font-size:11px;color:#6b7280;' }, 'إجمالي حقوق الملكية المجمعة'), el('div', { style: 'font-weight:700;color:#92400e;' }, fmt(nci.equity_total || 0))),
+                el('div', { style: 'background:#fff;padding:10px;border-radius:6px;' }, el('div', { style: 'font-size:11px;color:#6b7280;' }, 'متوسط نسبة الملكية'), el('div', { style: 'font-weight:700;color:#92400e;' }, (nci.ownership_pct || 0).toFixed(1) + '%')),
+                el('div', { style: 'background:#fff;padding:10px;border-radius:6px;' }, el('div', { style: 'font-size:11px;color:#6b7280;' }, 'حصة الشركة الأم'), el('div', { style: 'font-weight:700;color:#15803d;' }, fmt(nci.parent_share || 0))),
+                el('div', { style: 'background:#fff;padding:10px;border-radius:6px;' }, el('div', { style: 'font-size:11px;color:#6b7280;' }, 'الحصص غير المسيطر عليها'), el('div', { style: 'font-weight:700;color:#1e40af;' }, fmt(nci.nci || 0)))
+            )
+        );
+        res.appendChild(nciCard);
+
+        // الاستبعادات البينية
+        const ic = c.ic_eliminations || {};
+        const hasIC = Object.values(ic).some(v => v && v !== 0);
+        if (hasIC) {
+            const icCard = el('div', { style: 'background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:14px;margin-bottom:16px;' },
+                el('div', { style: 'font-size:14px;color:#166534;font-weight:700;margin-bottom:6px;' }, '✅ الاستبعادات البينية المطبقة'),
+                el('div', { style: 'font-size:12px;color:#15803d;line-height:1.8;' },
+                    Object.entries(ic).filter(([k, v]) => v && v !== 0).map(([k, v]) => {
+                        const labels = { ic_receivable: 'المدينون المتبادلون', ic_payable: 'الدائنون المتبادلون', ic_revenue: 'الإيرادات المتبادلة', ic_expense: 'المصاريف المتبادلة', investment_in_sub: 'استثمار الأم في التابعة' };
+                        return '<div>• ' + (labels[k] || k) + ': <strong>' + fmt(v) + '</strong></div>';
+                    }).join('')
+                )
+            );
+            res.appendChild(icCard);
+        }
+
+        // القوائم
+        const stmts = c.statements || {};
+        Object.entries(stmts).forEach(([key, stmt]) => {
+            const lines = stmt.lines || [];
+            const card = el('div', { style: 'background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:18px;margin-bottom:14px;' },
+                el('h3', { style: 'margin:0 0 12px;color:#1e40af;font-size:16px;' }, stmt.title || key),
+                el('table', { class: 'tb-table' },
+                    el('thead', {}, el('tr', {},
+                        el('th', { style: 'text-align:right;' }, 'البند'),
+                        el('th', { style: 'text-align:left;' }, 'المبلغ الموحد')
+                    )),
+                    el('tbody', {}, ...lines.map(l =>
+                        el('tr', { style: l.bold ? 'background:#f3f4f6;font-weight:600;' : (l.eliminated ? 'background:#f0fdf4;' : '') },
+                            el('td', { style: 'padding-right:' + (l.indent || 0) * 20 + 'px' + (l.eliminated ? ';color:#15803d;' : '') }, (l.label || '') + (l.eliminated ? ' ✓ (مستبعد)' : '')),
+                            el('td', { style: 'text-align:left;font-family:monospace;' + (l.eliminated ? ';color:#15803d;' : ''), 'data-amt': l.amount }, fmt(l.amount))
+                        )
+                    ))
+                )
+            );
+            res.appendChild(card);
+        });
+    }
+
+    async function exportConsolidated(groupId) {
+        try {
+            toast('⏳ جاري إنشاء Excel...', 'info');
+            const r = await fetch('/api/groups/' + groupId + '/export/xlsx?company_id=' + state.currentCompany.id, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            if (!r.ok) { const t = await r.text(); throw new Error(t || r.statusText); }
+            const blob = await r.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'consolidated_' + new Date().toISOString().slice(0, 10) + '.xlsx';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            toast('✅ تم التصدير', 'success');
         } catch (e) { toast('فشل التصدير: ' + e.message, 'error'); }
     }
 

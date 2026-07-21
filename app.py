@@ -942,3 +942,191 @@ def export_comparison(fmt: str, payload: dict):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=fname
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Consolidation Engine (IFRS 10) — Group APIs
+# ──────────────────────────────────────────────────────────────────────────────
+
+from core.consolidation import consolidate, export_consolidated_excel
+
+
+@app.get("/api/groups")
+def list_groups():
+    return {"groups": store.list_groups()}
+
+
+@app.post("/api/groups")
+def create_group(payload: dict):
+    name = (payload.get("name") or "").strip()
+    parent_id = payload.get("parent_company_id")
+    if not name:
+        raise HTTPException(400, "اسم المجموعة مطلوب")
+    if not parent_id:
+        raise HTTPException(400, "يجب تحديد الشركة الأم")
+    try:
+        store.get_company(parent_id)
+    except KeyError:
+        raise HTTPException(404, "الشركة الأم غير موجودة")
+    g = store.create_group(name, parent_id, payload.get("notes", ""))
+    return g
+
+
+@app.get("/api/groups/{group_id}")
+def get_group_detail(group_id: str):
+    try:
+        g = store.get_group(group_id)
+    except KeyError:
+        raise HTTPException(404, "مجموعة غير موجودة")
+    # enrich with company names
+    links = []
+    for l in g.get("links", []):
+        try:
+            c = store.get_company(l["company_id"])
+            l["company_name"] = c.get("name", "")
+        except KeyError:
+            l["company_name"] = "(محذوفة)"
+        links.append(l)
+    g["links"] = links
+    return g
+
+
+@app.post("/api/groups/{group_id}/add-company")
+def add_company(group_id: str, payload: dict):
+    company_id = payload.get("company_id")
+    pct = float(payload.get("ownership_pct", 0))
+    method = payload.get("consolidation_method", "full")
+    if not company_id or pct < 0 or pct > 100:
+        raise HTTPException(400, "بيانات غير صحيحة")
+    try:
+        store.get_company(company_id)
+    except KeyError:
+        raise HTTPException(404, "شركة غير موجودة")
+    return store.add_company_to_group(group_id, company_id, pct, method)
+
+
+@app.post("/api/groups/{group_id}/remove-company")
+def remove_company(group_id: str, payload: dict):
+    company_id = payload.get("company_id")
+    if not company_id:
+        raise HTTPException(400, "company_id مطلوب")
+    return store.remove_company_from_group(group_id, company_id)
+
+
+@app.delete("/api/groups/{group_id}")
+def delete_group(group_id: str):
+    try:
+        store.delete_group(group_id)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/groups/{group_id}/consolidate")
+def consolidate_group(group_id: str, payload: dict):
+    """
+    Build the consolidated statements for a group.
+
+    payload: {
+      "job_ids": {"<company_id>": "<job_id>", ...},   # one parsed job per company
+      "company_id": "<owner_company_id_for_data_path>"
+    }
+    If a company has no job_id, the latest saved job is used automatically.
+    """
+    from fastapi.responses import JSONResponse
+    try:
+        group = store.get_group(group_id)
+    except KeyError:
+        raise HTTPException(404, "مجموعة غير موجودة")
+    company_id_path = payload.get("company_id") or group.get("parent_company_id")
+    job_ids_map = payload.get("job_ids") or {}
+
+    jobs_data = []
+    for link in group.get("links", []):
+        cid = link["company_id"]
+        try:
+            company = store.get_company(cid)
+        except KeyError:
+            continue
+        # pick the job: explicit then latest
+        jid = job_ids_map.get(cid)
+        if not jid:
+            jobs_list = store.list_jobs(cid) or []
+            saved = [j for j in jobs_list if j.get("status") in ("ready", "committed", "processed")]
+            if not saved:
+                continue
+            jid = saved[0]["job_id"]
+        try:
+            job = store.get_job(cid, jid)
+        except KeyError:
+            continue
+        if not job.get("statements"):
+            continue
+        job["company_id"] = cid
+        job["company_name"] = company.get("name", "")
+        jobs_data.append(job)
+
+    if not jobs_data:
+        raise HTTPException(400, "لا توجد ميزانيات محفوظة لشركات المجموعة")
+
+    # enrich group dict with parent company name
+    try:
+        parent_co = store.get_company(group["parent_company_id"])
+        group["parent_company_name"] = parent_co.get("name", "")
+    except KeyError:
+        group["parent_company_name"] = ""
+
+    consolidated = consolidate(group, group.get("links", []), jobs_data)
+    # Add job_ids used
+    consolidated["job_ids_used"] = {j["company_id"]: j.get("job_id") for j in jobs_data}
+    return JSONResponse(content=consolidated)
+
+
+@app.post("/api/groups/{group_id}/export/xlsx")
+def export_group_xlsx(group_id: str, payload: dict):
+    """Export consolidated statements to Excel."""
+    from fastapi.responses import FileResponse
+    import tempfile
+    try:
+        group = store.get_group(group_id)
+    except KeyError:
+        raise HTTPException(404, "مجموعة غير موجودة")
+    job_ids_map = payload.get("job_ids") or {}
+    jobs_data = []
+    for link in group.get("links", []):
+        cid = link["company_id"]
+        try:
+            company = store.get_company(cid)
+        except KeyError:
+            continue
+        jid = job_ids_map.get(cid)
+        if not jid:
+            jobs_list = store.list_jobs(cid) or []
+            saved = [j for j in jobs_list if j.get("status") in ("ready", "committed", "processed")]
+            if not saved:
+                continue
+            jid = saved[0]["job_id"]
+        try:
+            job = store.get_job(cid, jid)
+        except KeyError:
+            continue
+        if not job.get("statements"):
+            continue
+        job["company_id"] = cid
+        job["company_name"] = company.get("name", "")
+        jobs_data.append(job)
+    if not jobs_data:
+        raise HTTPException(400, "لا توجد ميزانيات محفوظة")
+    try:
+        parent_co = store.get_company(group["parent_company_id"])
+        group["parent_company_name"] = parent_co.get("name", "")
+    except KeyError:
+        group["parent_company_name"] = ""
+    consolidated = consolidate(group, group.get("links", []), jobs_data)
+    out_path = os.path.join(tempfile.gettempdir(), f"consolidated_{group_id}.xlsx")
+    export_consolidated_excel(consolidated, out_path)
+    return FileResponse(
+        out_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"consolidated_{group.get('name', group_id)}.xlsx",
+    )
