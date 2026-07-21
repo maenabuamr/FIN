@@ -1678,6 +1678,11 @@ const App = (() => {
             sel.innerHTML = '<option value="">-- اختر الشركة الأم --</option>' +
                 companies.map(c => '<option value="' + c.id + '">' + c.name + '</option>').join('');
         } catch (e) { sel.innerHTML = '<option value="">تعذر التحميل</option>'; }
+        // Add change listener to clear sub-rows when parent changes
+        sel.addEventListener('change', () => {
+            const tbody = document.querySelector('[data-role="subs-tbody"]');
+            if (tbody) tbody.innerHTML = '';
+        });
     }
 
     function _addSubRow() {
