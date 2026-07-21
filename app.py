@@ -1130,3 +1130,230 @@ def export_group_xlsx(group_id: str, payload: dict):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=f"consolidated_{group.get('name', group_id)}.xlsx",
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Advanced Intercompany Eliminations Engine
+# ──────────────────────────────────────────────────────────────────────────────
+
+from core.eliminations import (
+    detect_ic_transactions,
+    pair_transactions,
+    apply_eliminations as apply_adv_eliminations,
+    export_eliminations_to_excel,
+    generate_journal_entries,
+)
+
+
+def _load_group_jobs_data(group_id: str, job_ids_map: dict) -> list[dict]:
+    """Helper: build jobs_data list for a group."""
+    try:
+        group = store.get_group(group_id)
+    except KeyError:
+        raise HTTPException(404, "مجموعة غير موجودة")
+    jobs_data = []
+    for link in group.get("links", []):
+        cid = link["company_id"]
+        try:
+            company = store.get_company(cid)
+        except KeyError:
+            continue
+        jid = (job_ids_map or {}).get(cid)
+        if not jid:
+            jobs_list = store.list_jobs(cid) or []
+            saved = [j for j in jobs_list if j.get("status") in ("ready", "committed", "processed")]
+            if not saved:
+                continue
+            jid = saved[0]["job_id"]
+        try:
+            job = store.get_job(cid, jid)
+        except KeyError:
+            continue
+        if not job.get("statements"):
+            continue
+        job["company_id"] = cid
+        job["company_name"] = company.get("name", "")
+        jobs_data.append(job)
+    return group, jobs_data
+
+
+@app.post("/api/groups/{group_id}/detect-eliminations")
+def detect_group_eliminations(group_id: str, payload: dict):
+    """
+    Auto-detect intercompany transactions across the group and pair them.
+    Returns: {
+      transactions: [...],
+      summary: { ic_receivable: 25000, ic_payable: 25000, ... },
+      matched_count: 2,
+      unmatched_count: 0
+    }
+    """
+    job_ids_map = payload.get("job_ids") or {}
+    try:
+        group, jobs_data = _load_group_jobs_data(group_id, job_ids_map)
+    except HTTPException:
+        raise
+    if not jobs_data:
+        raise HTTPException(400, "لا توجد ميزانيات محفوظة لشركات المجموعة")
+    transactions = detect_ic_transactions(jobs_data)
+    paired = pair_transactions(transactions)
+    summary = {}
+    for tx in paired:
+        cat = tx.get("sub_category", "")
+        if tx.get("matched"):
+            summary[cat] = summary.get(cat, 0) + tx["amount"]
+    matched_count = sum(1 for tx in paired if tx.get("matched"))
+    return {
+        "group_id": group_id,
+        "group_name": group.get("name", ""),
+        "transactions": paired,
+        "summary": summary,
+        "matched_count": matched_count,
+        "unmatched_count": len(paired) - matched_count,
+        "total_transactions": len(paired),
+    }
+
+
+@app.post("/api/groups/{group_id}/apply-eliminations")
+def apply_group_eliminations(group_id: str, payload: dict):
+    """
+    Apply approved eliminations and re-run consolidation.
+    payload: { job_ids: {...}, transaction_ids: [list of tx ids to apply] }
+    """
+    from fastapi.responses import JSONResponse
+    job_ids_map = payload.get("job_ids") or {}
+    tx_ids = set(payload.get("transaction_ids") or [])
+    try:
+        group, jobs_data = _load_group_jobs_data(group_id, job_ids_map)
+    except HTTPException:
+        raise
+    if not jobs_data:
+        raise HTTPException(400, "لا توجد ميزانيات محفوظة")
+    # Re-detect and pair
+    transactions = detect_ic_transactions(jobs_data)
+    paired = pair_transactions(transactions)
+    # Filter to only approved
+    if tx_ids:
+        filtered = [tx for tx in paired if tx["id"] in tx_ids or tx.get("matched_with") in tx_ids]
+    else:
+        filtered = [tx for tx in paired if tx.get("matched")]
+    # Run consolidation
+    try:
+        parent_co = store.get_company(group["parent_company_id"])
+        group["parent_company_name"] = parent_co.get("name", "")
+    except KeyError:
+        group["parent_company_name"] = ""
+    consolidated = consolidate(group, group.get("links", []), jobs_data)
+    # Apply advanced eliminations
+    consolidated = apply_adv_eliminations(consolidated, filtered)
+    # NCI
+    total_equity = _get_company_amount(jobs_data, "balance_sheet", "حقوق الملكية")
+    # Use the eliminated equity from consolidated
+    for line in (consolidated["statements"].get("balance_sheet", {}).get("lines") or []):
+        if "حقوق الملكية" in (line.get("label") or "") and line.get("bold"):
+            total_equity = float(line.get("amount", 0) or 0)
+            break
+    nci_info = compute_nci(total_equity, consolidated.get("avg_ownership_pct", 0))
+    consolidated["nci"] = nci_info
+    consolidated["elimination_journal"] = generate_journal_entries(
+        [{"sub_category": tx["sub_category"], "amount": tx["amount"]} for tx in filtered]
+    )
+    consolidated["applied_eliminations"] = [
+        {
+            "id": tx["id"],
+            "company": tx.get("company_name", ""),
+            "account": tx.get("account_name", ""),
+            "category": IC_CATEGORY_MAP.get(tx.get("sub_category", ""), {}).get("ar", ""),
+            "amount": tx["amount"],
+            "matched_with": tx.get("matched_with"),
+            "diff": tx.get("diff", 0),
+        }
+        for tx in filtered
+    ]
+    return JSONResponse(content=consolidated)
+
+
+@app.post("/api/groups/{group_id}/export/eliminations")
+def export_group_eliminations(group_id: str, payload: dict):
+    """Export detected eliminations to Excel."""
+    from fastapi.responses import FileResponse
+    import tempfile
+    job_ids_map = payload.get("job_ids") or {}
+    try:
+        group, jobs_data = _load_group_jobs_data(group_id, job_ids_map)
+    except HTTPException:
+        raise
+    if not jobs_data:
+        raise HTTPException(400, "لا توجد ميزانيات محفوظة")
+    transactions = detect_ic_transactions(jobs_data)
+    paired = pair_transactions(transactions)
+    out_path = os.path.join(tempfile.gettempdir(), f"eliminations_{group_id}.xlsx")
+    export_eliminations_to_excel(paired, out_path, group.get("name", "مجموعة"))
+    return FileResponse(
+        out_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"eliminations_{group.get('name', group_id)}.xlsx",
+    )
+
+
+@app.post("/api/groups/{group_id}/add-manual-elimination")
+def add_manual_elimination(group_id: str, payload: dict):
+    """
+    Add a manual intercompany elimination that the user defines.
+    payload: {
+      from_company_id, to_company_id, account_label,
+      amount, sub_category, description
+    }
+    """
+    from fastapi.responses import JSONResponse
+    job_ids_map = payload.get("job_ids") or {}
+    try:
+        group, jobs_data = _load_group_jobs_data(group_id, job_ids_map)
+    except HTTPException:
+        raise
+    if not jobs_data:
+        raise HTTPException(400, "لا توجد ميزانيات")
+    cat = payload.get("sub_category", "ic_receivable")
+    if cat not in IC_CATEGORY_MAP:
+        raise HTTPException(400, "نوع غير معروف")
+    amount = float(payload.get("amount", 0))
+    if amount <= 0:
+        raise HTTPException(400, "المبلغ يجب أن يكون أكبر من صفر")
+    transactions = detect_ic_transactions(jobs_data)
+    # Add the manual entry as a virtual transaction on both sides
+    manual_tx_id = f"tx_manual_{cat}_{payload.get('from_company_id', 'x')}_{payload.get('to_company_id', 'y')}"
+    from_co = next((j for j in jobs_data if j["company_id"] == payload.get("from_company_id")), None)
+    to_co = next((j for j in jobs_data if j["company_id"] == payload.get("to_company_id")), None)
+    if not from_co or not to_co:
+        raise HTTPException(400, "الشركات غير موجودة في المجموعة")
+    transactions.append({
+        "id": manual_tx_id + "_from",
+        "company_id": from_co["company_id"],
+        "company_name": from_co["company_name"],
+        "account_code": payload.get("account_code", ""),
+        "account_name": payload.get("account_label", ""),
+        "sub_category": cat,
+        "kind": IC_CATEGORY_MAP[cat]["kind"],
+        "amount": amount,
+        "is_debit": True,
+        "matched": True,
+        "matched_with": manual_tx_id + "_to",
+        "diff": 0.0,
+    })
+    complement = PAIRING_RULES.get(cat)
+    if complement:
+        transactions.append({
+            "id": manual_tx_id + "_to",
+            "company_id": to_co["company_id"],
+            "company_name": to_co["company_name"],
+            "account_code": payload.get("account_code", ""),
+            "account_name": payload.get("account_label", ""),
+            "sub_category": complement,
+            "kind": IC_CATEGORY_MAP[complement]["kind"],
+            "amount": amount,
+            "is_debit": True,
+            "matched": True,
+            "matched_with": manual_tx_id + "_from",
+            "diff": 0.0,
+        })
+    return JSONResponse(content={"transactions": transactions, "ok": True})
