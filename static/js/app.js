@@ -1,4 +1,4 @@
-/* نظام المراجعة المالية v2.3 */
+/* نظام المراجعة المالية v2.7 */
 const App = (() => {
     const state = { companies: [], currentCompany: null, currentView: 'companies', currentJob: null, currentTab: 'list' };
     const $ = (s) => document.querySelector(s);
@@ -52,8 +52,9 @@ const App = (() => {
             { key: 'trial_balance', label: 'ميزان المراجعة', icon: '⚖' },
             { key: 'statements', label: 'القوائم المالية', icon: '📊' },
             { key: 'notes', label: 'الإيضاحات', icon: '📝' },
-            { key: 'financial_analysis', label: 'تحليل مالي', icon: '📈' }, // <-- الخيار الجديد
-            { key: 'compare', label: 'المقارنات', icon: '⇄' },
+            { key: 'financial_analysis', label: 'تحليل مالي', icon: '📈' },
+            { key: 'attachments', label: 'مرفقات المستندات', icon: '📎' },
+            { key: 'compare', label: 'المقارنات المالية', icon: '⇄' },
         ];
         const sec = $('#nav-section');
         if (!sec) return;
@@ -71,12 +72,20 @@ const App = (() => {
     function setActiveNav(key) {
         $$('.nav-item').forEach(n => n.classList.remove('active'));
         const items = $$('.nav-item');
-        const idx = ['dashboard','trial_balance','statements','notes','financial_analysis','compare'].indexOf(key);
+        const idx = ['dashboard','trial_balance','statements','notes','financial_analysis','attachments','compare'].indexOf(key);
         if (idx >= 0 && items[idx]) items[idx].classList.add('active');
     }
     
     function renderTopbar() {
-        const titles = { dashboard: 'لوحة التحكم', trial_balance: 'ميزان المراجعة', statements: 'القوائم المالية', notes: 'الإيضاحات', financial_analysis: 'التحليل المالي الشامل', compare: 'المقارنات' };
+        const titles = { 
+            dashboard: 'لوحة التحكم', 
+            trial_balance: 'ميزان المراجعة', 
+            statements: 'القوائم المالية', 
+            notes: 'الإيضاحات', 
+            financial_analysis: 'التحليل المالي الشامل', 
+            attachments: 'مرفقات الملفات والمستندات', 
+            compare: 'مقارنة الفترات المالية' 
+        };
         const tb = $('.topbar');
         if (!tb) return;
         const showBack = state.currentView !== 'dashboard' && state.currentView !== 'companies';
@@ -98,12 +107,13 @@ const App = (() => {
         else if (view === 'statements') await renderStatements();
         else if (view === 'notes') await renderNotes();
         else if (view === 'financial_analysis') await renderFinancialAnalysis();
+        else if (view === 'attachments') await renderAttachments();
         else if (view === 'compare') await renderCompare();
     }
     
     function goBack() {
         if (state.currentView === 'trial_balance' && state.currentJob) { state.currentTab = 'list'; state.currentJob = null; localStorage.removeItem('currentJobId'); return renderTrialBalance(); }
-        if (['statements', 'notes', 'financial_analysis'].includes(state.currentView)) return switchView('trial_balance');
+        if (['statements', 'notes', 'financial_analysis', 'attachments', 'compare'].includes(state.currentView)) return switchView('trial_balance');
         return switchView('dashboard');
     }
     
@@ -309,7 +319,7 @@ const App = (() => {
         try {
             toast('⏳ جاري الرفع...', 'info');
             const r = await fetch(`/api/upload?company_id=${state.currentCompany.id}`, { method: 'POST', body: formData });
-            if (!r.ok) { const txt = await r.text(); throw new Error(txt || r.statusText); }
+            if (!r.ok) { const txt = await r.text(); throw new Error(txt || res.statusText); }
             const data = await r.json();
             toast('✅ تم الرفع كمسودة. راجع ثم احفظ', 'success');
             state.currentJob = data.job_id; state.currentTab = 'detail';
@@ -409,6 +419,7 @@ const App = (() => {
             const totalEquity = totals.equity?.total_equity || 0;
             const totalLiabEq = totalLiab + totalEquity;
             const isBalanced = Math.abs(totalAssets - totalLiabEq) < 0.01;
+            
             main.appendChild(el('div', { style: `background:${isBalanced ? '#f0fdf4' : '#fef2f2'};border:2px solid ${isBalanced ? '#86efac' : '#fca5a5'};border-radius:12px;padding:20px;margin-bottom:20px;` },
                 el('div', { style: 'display:flex;align-items:center;gap:12px;margin-bottom:12px;' },
                     el('div', { style: 'font-size:32px;' }, isBalanced ? '✅' : '❌'),
@@ -418,20 +429,37 @@ const App = (() => {
                     el('div', { style: 'background:#fff;padding:12px;border-radius:8px;' }, el('div', { style: 'font-size:12px;color:#6b7280;' }, 'الالتزامات'), el('div', { style: 'font-size:18px;font-weight:700;color:#0c4a6e;' }, fmt(totalLiab))),
                     el('div', { style: 'background:#fff;padding:12px;border-radius:8px;' }, el('div', { style: 'font-size:12px;color:#6b7280;' }, 'حقوق الملكية'), el('div', { style: 'font-size:18px;font-weight:700;color:#0c4a6e;' }, fmt(totalEquity))),
                     el('div', { style: 'background:#fff;padding:12px;border-radius:8px;' }, el('div', { style: 'font-size:12px;color:#6b7280;' }, 'الالتزامات+الملكية'), el('div', { style: 'font-size:18px;font-weight:700;color:#0c4a6e;' }, fmt(totalLiabEq))))));
+            
             const sec = el('div', { class: 'section' }, el('div', { class: 'section-header' },
-                el('h2', { style: 'margin:0;' }, '📊 القوائم المالية'),
+                el('h2', { style: 'margin:0;' }, '📊 القوائم المالية وإدارة الإيضاحات'),
                 el('div', { style: 'display:flex;gap:8px;' },
                     el('button', { class: 'btn btn-outline', onClick: () => exportFile('xlsx') }, '📥 Excel'),
                     el('button', { class: 'btn btn-primary', onClick: () => exportFile('pdf') }, '📥 PDF'))));
+            
             Object.entries(stmts).forEach(([k, v]) => {
                 const lines = v.lines || [];
                 sec.appendChild(el('div', { class: 'statement-card', style: 'background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:16px;' },
                     el('h3', { style: 'margin:0 0 12px;color:#1e40af;border-bottom:2px solid #1e40af;padding-bottom:8px;' }, v.title || k),
                     el('table', { class: 'tb-table' },
-                        el('thead', {}, el('tr', {}, el('th', {}, 'البند'), el('th', { style: 'text-align:left' }, 'المبلغ'))),
-                        el('tbody', {}, ...lines.map(l => el('tr', { style: l.bold ? 'background:#f3f4f6;font-weight:600;' : '' },
-                            el('td', { style: 'padding-right:' + (l.indent || 0) * 20 + 'px' }, l.label || ''),
-                            el('td', { style: 'text-align:left;font-family:monospace' }, fmt(l.amount))))))));
+                        el('thead', {}, el('tr', {}, 
+                            el('th', {}, 'البند'), 
+                            el('th', { style: 'text-align:left' }, 'المبلغ'),
+                            el('th', { style: 'width:100px;text-align:center;' }, 'إيضاح مخصص')
+                        )),
+                        el('tbody', {}, ...lines.map((l) => {
+                            const checkbox = el('input', { 
+                                type: 'checkbox', 
+                                style: 'width:18px;height:18px;cursor:pointer;',
+                                checked: l.has_note || false,
+                                onChange: (e) => { l.has_note = e.target.checked; }
+                            });
+
+                            return el('tr', { style: l.bold ? 'background:#f3f4f6;font-weight:600;' : '' },
+                                el('td', { style: 'padding-right:' + (l.indent || 0) * 20 + 'px' }, l.label || ''),
+                                el('td', { style: 'text-align:left;font-family:monospace' }, fmt(l.amount)),
+                                el('td', { style: 'text-align:center;' }, l.bold ? '' : checkbox)
+                            );
+                        })))));
             });
             main.appendChild(sec);
         } catch (e) { main.innerHTML = `<div class="empty">خطأ: ${e.message}</div>`; }
@@ -524,7 +552,7 @@ const App = (() => {
                 el('div', { style: 'margin-top:24px;background:#fefce8;border:1px solid #fef08a;border-radius:8px;padding:16px;' },
                     el('h3', { style: 'margin:0 0 8px;color:#854d0e;font-size:16px;' }, '💡 ملاحظات وقراءات تحليلية سريعة'),
                     el('p', { style: 'margin:0;color:#713f12;font-size:14px;line-height:1.6;' }, 
-                        'هذه المؤشرات محسوبة بشكل آلي وفوري بالاعتماد على ميزان المراجعة والقوائم المالية الحالية للشركة. يمكنك استخدامها لتقييم الوضع المالي العام أو إرفاقها ضمن تقارير الإدارة والإيضاحات.')
+                        'هذه المؤشرات محسوبة بشكل آلي والفوري بالاعتماد على ميزان المراجعة والقوائم المالية الحالية للشركة. يمكنك استخدامها لتقييم الوضع المالي العام أو إرفاقها ضمن تقارير الإدارة والإيضاحات.')
                 )
             );
             main.appendChild(container);
@@ -532,9 +560,318 @@ const App = (() => {
             main.innerHTML = `<div class="empty">خطأ في احتساب وتحميل التحليل المالي: ${e.message}</div>`; 
         }
     }
+
+    async function renderAttachments() {
+        const main = $('#main-content');
+        main.innerHTML = '';
+        if (!state.currentCompany) { main.innerHTML = '<div class="empty">الرجاء اختيار شركة أولاً</div>'; return; }
+
+        try {
+            const storageKey = `company_attachments_${state.currentCompany.id}`;
+            let folders = JSON.parse(localStorage.getItem(storageKey) || '[]');
+
+            const container = el('div', { class: 'section' },
+                el('div', { class: 'section-header' },
+                    el('div', {},
+                        el('h2', { style: 'margin:0;' }, '📁 إدارة ومرفقات المستندات المالية'),
+                        el('div', { style: 'font-size:13px;color:#6b7280;margin-top:4px;' }, 'أنشئ ملفات (مجلدات) سنوية أو شهرية وارفق كشوفات البنوك، المطابقات، ومعززات الأصول'))
+                ),
+                
+                el('div', { style: 'background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin:20px 0;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;' },
+                    el('div', { style: 'flex:1;min-width:220px;' },
+                        el('label', { style: 'display:block;margin-bottom:6px;font-size:13px;font-weight:600;' }, 'اسم الملف/المجلد الجديد (مثال: ملفات 2025 أو شهر 3-2024)'),
+                        el('input', { type: 'text', id: 'new-folder-name', placeholder: 'أدخل تسمية الملف...', style: 'width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px;box-sizing:border-box;' })
+                    ),
+                    el('button', { 
+                        class: 'btn btn-primary', 
+                        style: 'padding:10px 20px;height:41px;',
+                        onClick: () => {
+                            const input = $('#new-folder-name');
+                            const val = input.value.trim();
+                            if (!val) { toast('الرجاء إدخال تسمية صحيحة للملف', 'warn'); return; }
+                            folders.push({ id: 'f_' + Date.now(), name: val, files: [] });
+                            localStorage.setItem(storageKey, JSON.stringify(folders));
+                            input.value = '';
+                            toast('تم إنشاء الملف بنجاح', 'success');
+                            renderAttachments();
+                        }
+                    }, '➕ إنشاء ملف جديد')
+                )
+            );
+
+            if (folders.length === 0) {
+                container.appendChild(el('div', { style: 'text-align:center;padding:40px;background:#fff;border:2px dashed #cbd5e1;border-radius:10px;color:#64748b;' },
+                    el('div', { style: 'font-size:32px;margin-bottom:8px;' }, '📂'),
+                    el('div', { style: 'font-weight:600;' }, 'لا توجد ملفات فرعية مسجلة بعد'),
+                    el('div', { style: 'font-size:13px;margin-top:4px;' }, 'ابدأ بإنشاء ملف جديد (مثل ملفات 2025) لرفع المستندات بداخله')
+                ));
+            } else {
+                const foldersList = el('div', { style: 'display:flex;flex-direction:column;gap:16px;margin-top:20px;' });
+                
+                folders.forEach((folder, fIndex) => {
+                    const folderCard = el('div', { style: 'background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);' },
+                        el('div', { style: 'display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #f1f5f9;padding-bottom:12px;margin-bottom:16px;' },
+                            el('div', {},
+                                el('h3', { style: 'margin:0;font-size:18px;color:#1e293b;' }, '📁 ' + folder.name),
+                                el('span', { style: 'font-size:12px;color:#64748b;' }, `${folder.files.length} مستند مرفق`)
+                            ),
+                            el('div', { style: 'display:flex;gap:8px;' },
+                                el('label', { class: 'btn btn-outline', style: 'padding:6px 12px;font-size:13px;cursor:pointer;background:#f8fafc;' },
+                                    '📤 إرفاق مستند',
+                                    el('input', { 
+                                        type: 'file', 
+                                        style: 'display:none;', 
+                                        accept: '.pdf,.xlsx,.xls,.csv,image/*',
+                                        onChange: (e) => {
+                                            const file = e.target.files[0];
+                                            if (!file) return;
+                                            const reader = new FileReader();
+                                            reader.onload = function(uploadEvent) {
+                                                folder.files.push({
+                                                    name: file.name,
+                                                    size: (file.size / 1024).toFixed(1) + ' KB',
+                                                    type: file.type || 'مستند',
+                                                    date: new Date().toLocaleDateString('ar-JO'),
+                                                    dataUrl: uploadEvent.target.result
+                                                });
+                                                localStorage.setItem(storageKey, JSON.stringify(folders));
+                                                toast('تم إرفاق المستند بنجاح', 'success');
+                                                renderAttachments();
+                                            };
+                                            reader.readAsDataURL(file);
+                                        }
+                                    })
+                                ),
+                                el('button', { 
+                                    class: 'btn btn-outline', 
+                                    style: 'padding:6px 10px;color:#ef4444;border-color:#fca5a5;', 
+                                    onClick: () => {
+                                        if (confirm(`هل تريد حذف الملف "${folder.name}" وجميع محتوياته؟`)) {
+                                            folders.splice(fIndex, 1);
+                                            localStorage.setItem(storageKey, JSON.stringify(folders));
+                                            toast('تم حذف الملف', 'info');
+                                            renderAttachments();
+                                        }
+                                    }
+                                }, '🗑 حذف الملف')
+                            )
+                        )
+                    );
+
+                    if (folder.files.length === 0) {
+                        folderCard.appendChild(el('div', { style: 'padding:12px;text-align:center;color:#94a3b8;font-size:13px;background:#f8fafc;border-radius:6px;' }, 
+                            'لا توجد مستندات مرفقة في هذا الملف بعد. اضغط على "إرفاق مستند" (PDF، Excel، صور).'
+                        ));
+                    } else {
+                        const fileTable = el('table', { class: 'tb-table', style: 'width:100%;font-size:13px;' },
+                            el('thead', {}, el('tr', {}, 
+                                el('th', { style: 'text-align:right;' }, 'اسم المستند'),
+                                el('th', {}, 'الحجم'),
+                                el('th', {}, 'تاريخ الإرفاق'),
+                                el('th', { style: 'text-align:center;' }, 'الإجراءات')
+                            )),
+                            el('tbody', {}, ...folder.files.map((fileObj, fileIndex) => {
+                                return el('tr', {},
+                                    el('td', { style: 'font-weight:600;color:#334155;' }, '📄 ' + fileObj.name),
+                                    el('td', { style: 'color:#64748b;' }, fileObj.size),
+                                    el('td', { style: 'color:#64748b;' }, fileObj.date),
+                                    el('td', { style: 'text-align:center;display:flex;gap:6px;justify-content:center;' },
+                                        el('a', { 
+                                            class: 'btn btn-outline', 
+                                            style: 'padding:3px 8px;font-size:11px;text-decoration:none;',
+                                            href: fileObj.dataUrl,
+                                            download: fileObj.name,
+                                            target: '_blank'
+                                        }, '📥 تحميل / فتح'),
+                                        el('button', { 
+                                            class: 'btn btn-outline', 
+                                            style: 'padding:3px 6px;font-size:11px;color:#ef4444;',
+                                            onClick: () => {
+                                                folder.files.splice(fileIndex, 1);
+                                                localStorage.setItem(storageKey, JSON.stringify(folders));
+                                                toast('تم حذف المستند', 'success');
+                                                renderAttachments();
+                                            }
+                                        }, '🗑')
+                                    )
+                                );
+                            }))
+                        );
+                        folderCard.appendChild(fileTable);
+                    }
+                    foldersList.appendChild(folderCard);
+                });
+                container.appendChild(foldersList);
+            }
+            main.appendChild(container);
+        } catch (e) {
+            main.innerHTML = `<div class="empty">خطأ في تحميل المرفقات: ${e.message}</div>`;
+        }
+    }
     
-    async function renderCompare() { $('#main-content').innerHTML = '<div class="empty">مقارنة الفترات المالية (قريباً)</div>'; }
+    async function renderCompare() {
+        const main = $('#main-content');
+        main.innerHTML = '';
+        if (!state.currentCompany) { 
+            main.innerHTML = '<div class="empty">الرجاء اختيار شركة أولاً</div>'; 
+            return; 
+        }
+
+        try {
+            // جلب الموازين المحفوظة لهذه الشركة لتتمكن من اختيارها للمقارنة
+            const r = await api('/api/jobs');
+            const allJobs = (r.jobs || []).filter(j => j.status === 'ready' || j.status === 'committed' || j.status === 'processed');
+
+            const container = el('div', { class: 'section' },
+                el('div', { class: 'section-header' },
+                    el('div', {},
+                        el('h2', { style: 'margin:0;' }, '⇄ مقارنة الفترات المالية (سنة بسنة / فترة بفترة)'),
+                        el('div', { style: 'font-size:13px;color:#6b7280;margin-top:4px;' }, 'اختر ميزان الفترة الحالية وميزان الفترة المقارنة السابقة (أو ارفع ملفات PDF جديدة للمقارنة)'))
+                ),
+
+                // قسم اختيار أو رفع موازين المقارنة
+                el('div', { style: 'background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:20px;margin:20px 0;display:grid;grid-template-columns:1fr 1fr;gap:20px;' },
+                    
+                    // الفترة الحالية
+                    el('div', {},
+                        el('label', { style: 'display:block;margin-bottom:8px;font-weight:600;color:#1e293b;' }, '📅 ميزان الفترة الحالية (مثال: 2026 أو 31-03-2026)'),
+                        el('select', { id: 'compare-job-current', style: 'width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;' },
+                            el('option', { value: '' }, '-- اختر ميزان الفترة الحالية --'),
+                            ...allJobs.map(j => el('option', { value: j.job_id }, `${j.filename || 'ميزان'} (${j.period || 'الحالي'})`))
+                        )
+                    ),
+
+                    // الفترة السابقة للمقارنة
+                    el('div', {},
+                        el('label', { style: 'display:block;margin-bottom:8px;font-weight:600;color:#1e293b;' }, '📅 ميزان الفترة المقارنة السابقة (مثال: 2025 أو 31-03-2025)'),
+                        el('select', { id: 'compare-job-previous', style: 'width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;' },
+                            el('option', { value: '' }, '-- اختر ميزان الفترة السابقة --'),
+                            ...allJobs.map(j => el('option', { value: j.job_id }, `${j.filename || 'ميزان'} (${j.period || 'السابق'})`))
+                        )
+                    )
+                ),
+
+                el('div', { style: 'text-align:center;margin-bottom:24px;' },
+                    el('button', { 
+                        class: 'btn btn-primary', 
+                        style: 'padding:12px 32px;font-size:15px;',
+                        onClick: async () => {
+                            const curId = $('#compare-job-current').value;
+                            const prevId = $('#compare-job-previous').value;
+                            if (!curId || !prevId) { toast('الرجاء اختيار ميزان الفترة الحالية وميزان الفترة السابقة للمقارنة', 'warn'); return; }
+                            if (curId === prevId) { toast('لا يمكن مقارنة الميزان بنفسه، اختر فترتين مختلفتين', 'warn'); return; }
+                            
+                            toast('⏳ جاري استخراج ومقارنة القوائم...', 'info');
+                            try {
+                                const curData = await api(`/api/statements/${curId}`);
+                                const prevData = await api(`/api/statements/${prevId}`);
+                                renderComparisonTable(curData, prevData);
+                                toast('✅ تمت المقارنة بنجاح', 'success');
+                            } catch (err) {
+                                toast('خطأ في استخراج بيانات المقارنة: ' + err.message, 'error');
+                            }
+                        }
+                    }, '📊 تنفيذ وعرض تقرير المقارنة'),
+                       el('button', { class: 'btn btn-outline', style: 'padding:12px 24px;font-size:15px;margin-right:8px;', id: 'export-compare-btn', onClick: () => exportCompareToExcel() }, '📥 تصدير Excel')
+                ),
+
+                // حاوية جدول المقارنة الناتجة
+                el('div', { id: 'comparison-result-area' },
+                    el('div', { style: 'text-align:center;padding:40px;background:#fff;border:2px dashed #cbd5e1;border-radius:10px;color:#64748b;' },
+                        el('div', { style: 'font-size:32px;margin-bottom:8px;' }, '⚖️'),
+                        el('div', { style: 'font-weight:600;' }, 'لم يتم بدء المقارنة بعد'),
+                        el('div', { style: 'font-size:13px;margin-top:4px;' }, 'اختر الفترات بالأعلى ثم اضغط على "تنفيذ وعرض تقرير المقارنة"')
+                    )
+                )
+                
+            );
+            main.appendChild(container);
+        } catch (e) {
+            main.innerHTML = `<div class="empty">خطأ في تحميل صفحة المقارنات: ${e.message}</div>`;
+        }
+    }
+
+    // دالة مساعدة لدمج وعرض جدول المقارنة بين الفترتين
+    function renderComparisonTable(currentRes, previousRes) {
+        const resultArea = $('#comparison-result-area');
+        resultArea.innerHTML = '';
+
+        const curStmts = currentRes.statements || {};
+        const prevStmts = previousRes.statements || {};
+
+        const wrapper = el('div', { style: 'display:flex;flex-direction:column;gap:20px;' });
+
+        Object.keys(curStmts).forEach(key => {
+            const curStmt = curStmts[key] || { lines: [] };
+            const prevStmt = prevStmts[key] || { lines: [] };
+            
+            // خريطة سريعة لأبالغ الفترة السابقة حسب البند
+            const prevMap = {};
+            (prevStmt.lines || []).forEach(l => { prevMap[l.label] = l.amount || 0; });
+
+            const table = el('table', { class: 'tb-table', style: 'width:100%;font-size:13px;' },
+                el('thead', {}, el('tr', {},
+                    el('th', { style: 'text-align:right;' }, 'البند المالي'),
+                    el('th', { style: 'text-align:left;' }, 'الفترة الحالية'),
+                    el('th', { style: 'text-align:left;' }, 'الفترة السابقة'),
+                    
+                )),
+                el('tbody', {}, ...(curStmt.lines || []).map(curLine => {
+                    const curAmt = curLine.amount || 0;
+                    const prevAmt = prevMap[curLine.label] || 0;
+                    const diff = curAmt - prevAmt;
+                    const pct = prevAmt !== 0 ? ((diff / Math.abs(prevAmt)) * 100).toFixed(1) + '%' : '—';
+
+                    return el('tr', { style: curLine.bold ? 'background:#f8fafc;font-weight:600;' : '' },
+                        el('td', { style: 'padding-right:' + (curLine.indent || 0) * 20 + 'px' }, curLine.label || ''),
+                        el('td', { style: 'text-align:left;font-family:monospace;' }, fmt(curAmt)),
+                        el('td', { style: 'text-align:left;font-family:monospace;' }, fmt(prevAmt)),
+                    
+                    );
+                }))
+            );
+
+            wrapper.appendChild(el('div', { style: 'background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);' },
+                el('h3', { style: 'margin:0 0 16px;color:#1e40af;font-size:16px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;' }, curStmt.title || key),
+                table
+            ));
+        });
+
+        resultArea.appendChild(wrapper);
+    }
     
+        function exportCompareToExcel() {
+        const tables = document.querySelectorAll('#comparison-result-area .tb-table');
+        if (tables.length === 0) { toast('لا توجد بيانات مقارنة', 'warn'); return; }
+        let csv = 'تقرير المقارنة المالية\\n';
+        csv += 'تاريخ التصدير: ' + new Date().toLocaleString('ar-JO') + '\\n\\n';
+        tables.forEach((table, idx) => {
+            const card = table.closest('div[style*="background:#fff;border:1px solid #e2e8f0"]');
+            const heading = card ? card.querySelector('h3') : null;
+            const stmtTitle = heading ? heading.textContent.trim() : ('قائمة ' + (idx + 1));
+            csv += '=== ' + stmtTitle + ' ===\\n';
+            const rows = table.querySelectorAll('tr');
+            rows.forEach(row => {
+                const cells = row.querySelectorAll('th, td');
+                const rowData = Array.from(cells).map(c => '"' + c.textContent.trim().replace(/"/g, '""') + '"');
+                csv += rowData.join(',') + '\\n';
+            });
+            csv += '\\n';
+        });
+        const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const now = new Date();
+        const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+        a.download = 'comparison_' + stamp + '.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast('✅ تم التصدير (CSV يفتح في Excel)', 'success');
+    }
+
     const SUB_CATEGORIES = [
         ['cash_and_equivalents', 'النقدية وما في حكمها'], ['receivables', 'المدينون التجاريون'], ['inventory', 'المخزون'], ['prepayments', 'مصروفات مقدمة وأصول أخرى'],
         ['other_current_assets', 'أصول متداولة أخرى'], ['ppe', 'ممتلكات ومعدات (PPE)'], ['intangible_assets', 'أصول غير ملموسة'], ['investments', 'استثمارات'],
