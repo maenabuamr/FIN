@@ -1,6 +1,6 @@
 /* نظام المراجعة المالية v2.7 */
 const App = (() => {
-    const state = { companies: [], currentCompany: null, currentView: 'companies', currentJob: null, currentTab: 'list' };
+    const state = { companies: [], currentCompany: null, currentView: 'companies', currentJob: null, currentTab: 'list', comparisonNotesSelection: {} };
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => Array.from(document.querySelectorAll(s));
     
@@ -964,10 +964,13 @@ const App = (() => {
 
         const wrapper = el('div', { style: 'display:flex;flex-direction:column;gap:20px;' });
 
+        const curId = $('#compare-job-current').value;
+        const prevId = $('#compare-job-previous').value;
+
         Object.keys(curStmts).forEach(key => {
             const curStmt = curStmts[key] || { lines: [] };
             const prevStmt = prevStmts[key] || { lines: [] };
-            
+
             // خريطة سريعة لأبالغ الفترة السابقة حسب البند
             const prevMap = {};
             (prevStmt.lines || []).forEach(l => { prevMap[l.label] = l.amount || 0; });
@@ -977,7 +980,7 @@ const App = (() => {
                     el('th', { style: 'text-align:right;' }, 'البند المالي'),
                     el('th', { style: 'text-align:left;' }, 'الفترة الحالية'),
                     el('th', { style: 'text-align:left;' }, 'الفترة السابقة'),
-                    
+                    el('th', { style: 'width:120px;text-align:center;background:#1e40af;color:#fff;' }, 'إيضاح مخصص')
                 )),
                 el('tbody', {}, ...(curStmt.lines || []).map(curLine => {
                     const curAmt = curLine.amount || 0;
@@ -985,11 +988,25 @@ const App = (() => {
                     const diff = curAmt - prevAmt;
                     const pct = prevAmt !== 0 ? ((diff / Math.abs(prevAmt)) * 100).toFixed(1) + '%' : '—';
 
+                    const selKey = curId + '||' + prevId + '||' + key + '||' + (curLine.label || '');
+                    const isChecked = state.comparisonNotesSelection[selKey] !== false;
+                    const cbId = 'cb_' + Math.random().toString(36).slice(2, 10);
+                    const cb = el('input', {
+                        type: 'checkbox',
+                        id: cbId,
+                        style: 'width:18px;height:18px;cursor:pointer;accent-color:#1e40af;',
+                        title: 'تضمين هذا البند في الإيضاحات',
+                        checked: isChecked,
+                        onChange: (e) => {
+                            state.comparisonNotesSelection[selKey] = e.target.checked;
+                        }
+                    });
+
                     return el('tr', { style: curLine.bold ? 'background:#f8fafc;font-weight:600;' : '' },
                         el('td', { style: 'padding-right:' + (curLine.indent || 0) * 20 + 'px' }, curLine.label || ''),
                         el('td', { style: 'text-align:left;font-family:monospace;' }, fmt(curAmt)),
                         el('td', { style: 'text-align:left;font-family:monospace;' }, fmt(prevAmt)),
-                    
+                        el('td', { style: 'text-align:center;' }, curLine.bold ? '' : cb)
                     );
                 }))
             );
@@ -999,6 +1016,59 @@ const App = (() => {
                 table
             ));
         });
+
+        // شريط أدوات التحديد
+        const toolbar = el('div', { id: 'notes-toolbar', style: 'background:linear-gradient(90deg,#eff6ff 0%,#dbeafe 100%);border:1px solid #93c5fd;border-radius:8px;padding:12px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;' },
+            el('span', { style: 'font-weight:700;color:#1e40af;margin-left:8px;font-size:14px;' }, '⚙️ تحكم في الإيضاحات:'),
+            el('button', { class: 'btn btn-outline', style: 'padding:6px 14px;font-size:13px;background:#fff;', onClick: () => {
+                document.querySelectorAll('#comparison-result-area input[type="checkbox"]').forEach(c => { c.checked = true; });
+                // نعيد بناء الـ selection من checkboxes الحالية
+                const newSel = {};
+                document.querySelectorAll('#comparison-result-area input[type="checkbox"]').forEach(c => {
+                    const sk = c.getAttribute('data-selkey');
+                    if (sk) newSel[sk] = true;
+                });
+                state.comparisonNotesSelection = { ...state.comparisonNotesSelection, ...newSel };
+                toast('✅ تم تحديد كل البنود للإيضاحات', 'success');
+            } }, '☑️ تحديد كل البنود'),
+            el('button', { class: 'btn btn-outline', style: 'padding:6px 14px;font-size:13px;background:#fff;', onClick: () => {
+                document.querySelectorAll('#comparison-result-area input[type="checkbox"]').forEach(c => { c.checked = false; });
+                const newSel = {};
+                document.querySelectorAll('#comparison-result-area input[type="checkbox"]').forEach(c => {
+                    const sk = c.getAttribute('data-selkey');
+                    if (sk) newSel[sk] = false;
+                });
+                state.comparisonNotesSelection = { ...state.comparisonNotesSelection, ...newSel };
+                toast('⚠️ تم إلغاء تحديد كل البنود', 'warn');
+            } }, '⬜ إلغاء تحديد الكل')
+        );
+        wrapper.appendChild(toolbar);
+
+        // بعد الـ render، نضع data-selkey على كل checkbox
+        setTimeout(() => {
+            document.querySelectorAll('#comparison-result-area input[type="checkbox"]').forEach(c => {
+                if (!c.getAttribute('data-selkey')) {
+                    // retrieve the original selKey from the DOM row context
+                    // This is best-effort; we fallback to building it from the row label
+                    const row = c.closest('tr');
+                    if (row) {
+                        const label = row.cells[0] ? row.cells[0].textContent.trim() : '';
+                        const card = c.closest('div[style*="background:#fff"]');
+                        const heading = card ? card.querySelector('h3') : null;
+                        const stmtTitle = heading ? heading.textContent.trim() : '';
+                        // Map title to a stable key
+                        const stmtKey = stmtTitle.includes('المركز') ? 'balance_sheet'
+                            : stmtTitle.includes('الدخل') ? 'income_statement'
+                            : stmtTitle.includes('التدفق') ? 'cash_flow'
+                            : stmtTitle.includes('حقوق') ? 'equity' : stmtTitle;
+                        const selKey = curId + '||' + prevId + '||' + stmtKey + '||' + label;
+                        c.setAttribute('data-selkey', selKey);
+                        // تأكد من الحالة تطابق الـ state
+                        c.checked = state.comparisonNotesSelection[selKey] !== false;
+                    }
+                }
+            });
+        }, 0);
 
         // قسم الإيضاحات المفصّلة (كارت لكل إيضاح بمقارنة فترتين)
         const curNotes = currentRes.notes || [];
@@ -1020,18 +1090,35 @@ const App = (() => {
 
         resultArea.appendChild(wrapper);
     }
-    
+
         async function exportCompareToExcel() {
         const currentId = $('#compare-job-current').value;
         const previousId = $('#compare-job-previous').value;
         if (!currentId || !previousId) { toast('اختر الفترة الحالية والسابقة أولاً', 'warn'); return; }
         if (currentId === previousId) { toast('لا يمكن مقارنة نفس الفترة', 'warn'); return; }
+        // اجمع كل الـ checkboxes المحددة (لاحظ: الخط/البند الذي يطابق عنوان الإيضاح)
+        const selectedTitles = [];
+        const allTitles = [];
+        document.querySelectorAll('#comparison-result-area input[type="checkbox"]').forEach(c => {
+            const sk = c.getAttribute('data-selkey');
+            if (!sk) return;
+            // selKey = currentId||previousId||stmtKey||label
+            const parts = sk.split('||');
+            const label = parts.slice(3).join('||');
+            allTitles.push(label);
+            if (c.checked) selectedTitles.push(label);
+        });
         try {
-            toast('⏳ جاري إنشاء ملف Excel...', 'info');
+            toast('⏳ جاري إنشاء ملف Excel (' + selectedTitles.length + ' إيضاح محدد)...', 'info');
             const r = await fetch('/api/compare/export/xlsx?company_id=' + state.currentCompany.id, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ current_job_id: currentId, previous_job_id: previousId, company_id: state.currentCompany.id })
+                body: JSON.stringify({
+                    current_job_id: currentId,
+                    previous_job_id: previousId,
+                    company_id: state.currentCompany.id,
+                    selected_titles: selectedTitles,
+                })
             });
             if (!r.ok) { const txt = await r.text(); throw new Error(txt || r.statusText); }
             const blob = await r.blob();
@@ -1043,7 +1130,7 @@ const App = (() => {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            toast('✅ تم تصدير المقارنة إلى Excel بنجاح', 'success');
+            toast('✅ تم تصدير المقارنة إلى Excel بنجاح (' + selectedTitles.length + '/' + allTitles.length + ' إيضاح)', 'success');
         } catch (e) { toast('فشل التصدير: ' + e.message, 'error'); }
     }
 

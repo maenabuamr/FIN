@@ -768,15 +768,12 @@ def _build_notes_comparison_rows(current_notes: list, previous_notes: list) -> l
 
 
 
-def _build_detailed_notes_for_comparison(current_notes, previous_notes):
+def _build_detailed_notes_for_comparison(current_notes, previous_notes, selected_titles=None):
     """
     بناء الإيضاحات المفصّلة للمقارنة بين فترتين.
-    كل إيضاح يحتوي:
-      - number, title, body
-      - current_accounts: list of {code, name, amount}
-      - previous_accounts: list of {code, name, amount}
-      - current_total, previous_total, diff
+    selected_titles: إذا تم تمريره، نُبقي فقط الإيضاحات اللي عنوانها فيه (None = الكل)
     """
+    selected_set = set(selected_titles) if selected_titles else None
     prev_map = {n.get("title", ""): n for n in (previous_notes or [])}
     titles = []
     seen = set()
@@ -799,13 +796,18 @@ def _build_detailed_notes_for_comparison(current_notes, previous_notes):
         return sum((a.get("amount", 0) or 0) for a in (n.get("accounts") or []))
 
     notes_out = []
+    out_idx = 0
     for idx, title in enumerate(titles, 1):
+        # فلتر: إذا في selected_set، نتجاهل العناوين غير الموجودة
+        if selected_set is not None and title not in selected_set:
+            continue
         cn = next((n for n in (current_notes or []) if n.get("title") == title), None)
         pn = prev_map.get(title)
         cur_total = _total(cn)
         prev_total = _total(pn) if pn else 0
+        out_idx += 1
         notes_out.append({
-            "number": idx,
+            "number": out_idx,
             "title": title,
             "body": (cn or {}).get("body", "") or (pn or {}).get("body", ""),
             "current_accounts": (cn or {}).get("accounts", []) or [],
@@ -920,8 +922,10 @@ def export_comparison(fmt: str, payload: dict):
     period_prior = previous_job.get("period", "السابقة")
     
     comparisons, kpis = _build_comparison_data(current_job, previous_job)
+    selected_titles = payload.get("selected_titles")  # list of note titles to include; None = all
     detailed_full = _build_detailed_notes_for_comparison(
-        current_job.get("notes", []), previous_job.get("notes", [])
+        current_job.get("notes", []), previous_job.get("notes", []),
+        selected_titles=selected_titles
     )
     out_path = os.path.join(tempfile.gettempdir(), f"comparison_{current_id}_{previous_id}.xlsx")
     _exp_comp(comparisons, kpis, out_path, company_name, period_current, period_prior)
