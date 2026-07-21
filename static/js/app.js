@@ -399,10 +399,10 @@ const App = (() => {
                     profile[key] = a.sub_category;
                 }
             });
-            const resp = await api(`/api/companies/${state.currentCompany.id}/save-profile`, {
+            const resp = await api(`/api/companies/${state.currentCompany.id}/save-profile?job_id=${state.currentJob}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(profile)
+                body: JSON.stringify({ profile: profile })
             });
             toast('✅ تم حفظ ' + Object.keys(profile).length + ' تصنيف كقالب', 'success');
             const status = $('#profile-status');

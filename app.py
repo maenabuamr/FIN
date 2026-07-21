@@ -163,50 +163,6 @@ def get_company_profile(company_id: str):
 
 @app.post("/api/companies/{company_id}/save-profile")
 def save_company_profile(company_id: str, payload: dict = None):
-    try:
-        store.get_company(company_id)
-    except KeyError:
-        raise HTTPException(404, "الشركة غير موجودة")
-    payload = payload or {}
-    new_profile = None
-    if "profile" in payload and isinstance(payload["profile"], dict):
-        new_profile = payload["profile"]
-    elif "job_id" in payload:
-        try:
-            job = store.get_job(company_id, payload["job_id"])
-        except KeyError:
-            raise HTTPException(404, "الوظيفة غير موجودة")
-        new_profile = {}
-        for a in job.get("accounts", []):
-            code = (a.get("code") or "").strip()
-            sub = a.get("sub_category")
-            if code and sub and sub != "unspecified":
-                new_profile[code] = sub
-    else:
-        raise HTTPException(400, "يجب إرسال job_id أو profile")
-    existing = store.get_profile(company_id)
-    existing.update(new_profile)
-    store.save_profile(company_id, existing)
-    return {"ok": True, "company_id": company_id, "count": len(existing)}
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Account Profile (saved classifications per company)
-# ──────────────────────────────────────────────────────────────────────────────
-
-@app.get("/api/companies/{company_id}/profile")
-def get_company_profile(company_id: str):
-    """Return the saved account classifications for this company."""
-    try:
-        store.get_company(company_id)
-    except KeyError:
-        raise HTTPException(404, "الشركة غير موجودة")
-    profile = store.get_profile(company_id)
-    return {"company_id": company_id, "profile": profile, "count": len(profile)}
-
-
-@app.post("/api/companies/{company_id}/save-profile")
-def save_company_profile(company_id: str, payload: dict = None):
     """Save all current account classifications from a job as the company profile.
 
     Body: {"job_id": "<job_id>"}
