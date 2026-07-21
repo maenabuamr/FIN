@@ -702,6 +702,70 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
 
+def _build_notes_comparison_rows(current_notes: list, previous_notes: list) -> list[dict]:
+    """
+    Build a flat list of rows for "الإيضاحات - مقارنة" sheet.
+    Each note generates TWO rows: current period then previous period, sharing the same serial number.
+    Columns: رقم | الإيضاح | الفترة | الرصيد | الوصف | الحسابات
+    """
+    rows = []
+    prev_map = {n.get("title", ""): n for n in (previous_notes or [])}
+    # build list of all unique titles, preserving current order
+    titles = []
+    seen = set()
+    for n in (current_notes or []):
+        t = n.get("title", "")
+        if t and t not in seen:
+            seen.add(t); titles.append(t)
+    for n in (previous_notes or []):
+        t = n.get("title", "")
+        if t and t not in seen:
+            seen.add(t); titles.append(t)
+
+    def _note_total(n):
+        if not n: return 0
+        for row in (n.get("table") or []):
+            if "الرصيد" in str(row.get("label", "")):
+                return row.get("amount", 0) or 0
+        tbl = n.get("table") or []
+        if tbl: return tbl[0].get("amount", 0) or 0
+        return sum((a.get("amount", 0) or 0) for a in (n.get("accounts") or []))
+
+    def _note_body(n):
+        return (n.get("body") or "") if n else ""
+
+    def _note_accounts_text(n):
+        if not n: return ""
+        parts = []
+        for a in (n.get("accounts") or []):
+            code = a.get("code", "")
+            name = a.get("name", "")
+            amt = a.get("amount", 0) or 0
+            parts.append(f"{code} - {name}: {amt:,.0f}")
+        return " | ".join(parts)
+
+    for idx, title in enumerate(titles, 1):
+        cn = next((n for n in (current_notes or []) if n.get("title") == title), None)
+        pn = prev_map.get(title)
+        rows.append({
+            "num": idx,
+            "title": title,
+            "period": "الفترة الحالية",
+            "total": _note_total(cn),
+            "body": _note_body(cn),
+            "accounts": _note_accounts_text(cn),
+        })
+        rows.append({
+            "num": idx,
+            "title": title,
+            "period": "الفترة السابقة",
+            "total": _note_total(pn) if pn else 0,
+            "body": _note_body(pn),
+            "accounts": _note_accounts_text(pn),
+        })
+    return rows
+
+
 def _build_comparison_data(current_job, previous_job):
     """تحويل jobs إلى structure يطابق توقيع export_comparison_excel الأصلي + الإيضاحات."""
     cur_stmts = current_job.get("statements", {}) or {}
@@ -806,8 +870,11 @@ def export_comparison(fmt: str, payload: dict):
     period_prior = previous_job.get("period", "السابقة")
     
     comparisons, kpis = _build_comparison_data(current_job, previous_job)
+    detailed_notes = _build_notes_comparison_rows(
+        current_job.get("notes", []), previous_job.get("notes", [])
+    )
     out_path = os.path.join(tempfile.gettempdir(), f"comparison_{current_id}_{previous_id}.xlsx")
-    _exp_comp(comparisons, kpis, out_path, company_name, period_current, period_prior)
+    _exp_comp(comparisons, kpis, out_path, company_name, period_current, period_prior, detailed_notes=detailed_notes)
     
     fname = f"comparison_{period_current}_vs_{period_prior}.xlsx"
     return FileResponse(

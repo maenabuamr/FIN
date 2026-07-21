@@ -442,6 +442,7 @@ def export_comparison_excel(
     company_name: str = "الشركة",
     period_current: str = "",
     period_prior: str = "",
+    detailed_notes: list[dict] | None = None,  # rows of {num, title, period, total, body, accounts}
 ) -> str:
     wb = Workbook()
     wb.remove(wb.active)
@@ -517,6 +518,50 @@ def export_comparison_excel(
             ws.cell(row=i, column=3).number_format = "#,##0.00;(#,##0.00)"
         for col, w in zip("ABC", [45, 22, 22]):
             ws.column_dimensions[col].width = w
+
+    # Detailed notes comparison sheet
+    if detailed_notes:
+        wn = wb.create_sheet("الإيضاحات - تفاصيل مقارنة")
+        wn["A1"] = "الإيضاحات - تفاصيل المقارنة"
+        wn["A1"].font = Font(name="Calibri", size=16, bold=True)
+        wn["A1"].alignment = Alignment(horizontal="center", readingOrder=2)
+        wn.merge_cells("A1:F1")
+        wn["A2"] = f"مقارنة {period_prior} ←→ {period_current}"
+        wn["A2"].font = Font(name="Calibri", size=11, italic=True, color="6B7280")
+        wn["A2"].alignment = Alignment(horizontal="center", readingOrder=2)
+        wn.merge_cells("A2:F2")
+        hdrs = ["رقم", "عنوان الإيضاح", "الفترة", "الرصيد", "الوصف", "الحسابات"]
+        for i, h in enumerate(hdrs, start=1):
+            cell = wn.cell(row=4, column=i, value=h)
+            cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="1E293B")
+            cell.alignment = Alignment(horizontal="center", readingOrder=2)
+        for i, row in enumerate(detailed_notes, start=5):
+            wn.cell(row=i, column=1, value=row.get("num", ""))
+            wn.cell(row=i, column=2, value=row.get("title", ""))
+            wn.cell(row=i, column=3, value=row.get("period", ""))
+            wn.cell(row=i, column=4, value=row.get("total", 0))
+            wn.cell(row=i, column=5, value=row.get("body", ""))
+            wn.cell(row=i, column=6, value=row.get("accounts", ""))
+            for col in range(1, 7):
+                cell = wn.cell(row=i, column=col)
+                cell.font = Font(name="Calibri", size=10)
+                cell.alignment = Alignment(
+                    horizontal="right" if col in (1,2,3,5,6) else "left", readingOrder=2, wrap_text=True
+                )
+                if col == 4:
+                    cell.number_format = "#,##0.00;(#,##0.00)"
+                    if (row.get("total") or 0) < 0:
+                        cell.font = Font(name="Calibri", size=10, color="DC2626")
+            # group alternating by serial number
+            num = row.get("num", 0)
+            if isinstance(num, int) and num % 2 == 0:
+                for col in range(1, 7):
+                    wn.cell(row=i, column=col).fill = PatternFill("solid", fgColor="F8FAFC")
+        for col, w in zip("ABCDEF", [6, 35, 16, 18, 55, 60]):
+            wn.column_dimensions[col].width = w
+        wn.row_dimensions[1].height = 28
+        wn.row_dimensions[4].height = 24
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)

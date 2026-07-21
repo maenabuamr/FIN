@@ -790,6 +790,43 @@ const App = (() => {
     }
 
     // دالة مساعدة لدمج وعرض جدول المقارنة بين الفترتين
+    function _buildNoteRows(curNotes, prevNotes) {
+        const prevMap = {};
+        (prevNotes || []).forEach(n => { prevMap[n.title || ''] = n; });
+        const titles = [];
+        const seen = new Set();
+        [...(curNotes || []), ...(prevNotes || [])].forEach(n => {
+            const t = n.title || '';
+            if (t && !seen.has(t)) { seen.add(t); titles.push(t); }
+        });
+        const totalFor = (n) => {
+            if (!n) return 0;
+            const tbl = n.table || [];
+            if (tbl.length > 0) {
+                for (const row of tbl) {
+                    if (String(row.label || '').includes('الرصيد')) return row.amount || 0;
+                }
+                return tbl[0].amount || 0;
+            }
+            return (n.accounts || []).reduce((s, a) => s + (a.amount || 0), 0);
+        };
+        const bodyOf = (n) => (n && n.body) ? n.body : '';
+        const accountsText = (n) => {
+            if (!n) return '';
+            return (n.accounts || []).map(a => {
+                return (a.code || '') + ' - ' + (a.name || '') + ': ' + ((a.amount || 0).toLocaleString('en-US'));
+            }).join(' | ');
+        };
+        const rows = [];
+        titles.forEach((title, idx) => {
+            const cn = (curNotes || []).find(n => n.title === title);
+            const pn = prevMap[title];
+            rows.push({ num: idx + 1, title: title, period: 'الفترة الحالية', total: totalFor(cn), body: bodyOf(cn), accounts: accountsText(cn) });
+            rows.push({ num: idx + 1, title: title, period: 'الفترة السابقة', total: totalFor(pn), body: bodyOf(pn), accounts: accountsText(pn) });
+        });
+        return rows;
+    }
+
     function renderComparisonTable(currentRes, previousRes) {
         const resultArea = $('#comparison-result-area');
         resultArea.innerHTML = '';
@@ -835,46 +872,32 @@ const App = (() => {
             ));
         });
 
-        // قسم الإيضاحات المقارنة
+        // قسم الإيضاحات المفصّلة (رقم + عنوان + الفترة + الرصيد + الوصف + الحسابات)
         const curNotes = currentRes.notes || [];
         const prevNotes = previousRes.notes || [];
-        if (curNotes.length > 0 || prevNotes.length > 0) {
-            const prevNoteMap = {};
-            prevNotes.forEach(n => { prevNoteMap[n.title || ''] = n; });
-            const allTitles = [];
-            const seen = new Set();
-            [...curNotes, ...prevNotes].forEach(n => {
-                const t = n.title || '';
-                if (t && !seen.has(t)) { seen.add(t); allTitles.push(t); }
-            });
-            const totalFor = (n) => {
-                if (!n) return 0;
-                const tbl = n.table || [];
-                if (tbl.length > 0) {
-                    for (const row of tbl) {
-                        if (String(row.label || '').includes('الرصيد')) return row.amount || 0;
-                    }
-                    return tbl[0].amount || 0;
-                }
-                const accs = n.accounts || [];
-                return accs.reduce((s, a) => s + (a.amount || 0), 0);
-            };
-            const noteTable = el('table', { class: 'tb-table', style: 'width:100%;font-size:13px;' },
+        const noteRows = _buildNoteRows(curNotes, prevNotes);
+        if (noteRows.length > 0) {
+            const noteTable = el('table', { class: 'tb-table', style: 'width:100%;font-size:12px;' },
                 el('thead', {}, el('tr', {},
-                    el('th', { style: 'text-align:right;' }, 'الإيضاح'),
-                    el('th', { style: 'text-align:left;' }, 'الفترة الحالية'),
-                    el('th', { style: 'text-align:left;' }, 'الفترة السابقة'))),
-                el('tbody', {}, ...allTitles.map(title => {
-                    const cn = curNotes.find(n => n.title === title);
-                    const pn = prevNoteMap[title];
-                    return el('tr', {},
-                        el('td', { style: 'text-align:right;font-weight:600;color:#1e40af;' }, title),
-                        el('td', { style: 'text-align:left;font-family:monospace;' }, fmt(totalFor(cn))),
-                        el('td', { style: 'text-align:left;font-family:monospace;color:#6b7280;' }, fmt(totalFor(pn))));
-                }))
+                    el('th', { style: 'text-align:center;width:50px;' }, 'رقم'),
+                    el('th', { style: 'text-align:right;' }, 'عنوان الإيضاح'),
+                    el('th', { style: 'text-align:center;width:110px;' }, 'الفترة'),
+                    el('th', { style: 'text-align:left;width:130px;' }, 'الرصيد'),
+                    el('th', { style: 'text-align:right;' }, 'الوصف'),
+                    el('th', { style: 'text-align:right;' }, 'الحسابات'))),
+                el('tbody', {}, ...noteRows.map(r =>
+                    el('tr', { style: (r.num % 2 === 0) ? 'background:#f8fafc;' : '' },
+                        el('td', { style: 'text-align:center;font-weight:700;color:#1e40af;' }, String(r.num)),
+                        el('td', { style: 'text-align:right;font-weight:600;color:#1e3a8a;' }, r.title),
+                        el('td', { style: 'text-align:center;color:' + (r.period === 'الفترة الحالية' ? '#15803d' : '#6b7280') + ';' }, r.period),
+                        el('td', { style: 'text-align:left;font-family:monospace;font-weight:600;' }, fmt(r.total)),
+                        el('td', { style: 'text-align:right;color:#475569;font-size:11px;' }, r.body),
+                        el('td', { style: 'text-align:right;color:#334155;font-size:11px;font-family:monospace;' }, r.accounts)
+                    )
+                ))
             );
             wrapper.appendChild(el('div', { style: 'background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);' },
-                el('h3', { style: 'margin:0 0 16px;color:#1e40af;font-size:16px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;' }, 'الإيضاحات - مقارنة'),
+                el('h3', { style: 'margin:0 0 16px;color:#1e40af;font-size:16px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;' }, 'الإيضاحات - تفاصيل المقارنة'),
                 noteTable
             ));
         }
