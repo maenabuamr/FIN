@@ -368,8 +368,112 @@ const App = (() => {
                     el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;' },
                         el('button', { class: 'btn btn-outline', onClick: processJob }, '⚙️ توليد القوائم المالية'),
                         isDraft ? el('button', { class: 'btn btn-primary', onClick: () => commitJob(state.currentJob) }, '💾 حفظ نهائي') : el('span', { class: 'tag green' }, '✓ محفوظ'))),
+                // شريط أدوات التصنيف الذكي
+                el('div', { style: 'background:linear-gradient(90deg,#eff6ff 0%,#dbeafe 100%);border:1px solid #93c5fd;border-radius:8px;padding:12px 16px;margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;' },
+                    el('span', { style: 'font-weight:700;color:#1e40af;font-size:13px;' }, '💼 التصنيف الذكي:'),
+                    el('button', { class: 'btn btn-outline', style: 'padding:6px 14px;font-size:13px;background:#fff;', onClick: () => saveAsProfile() }, '💾 حفظ التصنيفات كقالب'),
+                    el('button', { class: 'btn btn-outline', style: 'padding:6px 14px;font-size:13px;background:#fff;', onClick: () => applyProfile() }, '📋 تطبيق قالب محفوظ'),
+                    el('button', { class: 'btn btn-outline', style: 'padding:6px 14px;font-size:13px;background:#fff;', onClick: () => autoTagIntercompany() }, '🔗 كشف تلقائي للبنوك البينية'),
+                    el('span', { id: 'profile-status', style: 'margin-right:auto;font-size:12px;color:#6b7280;' })
+                ),
                 table));
         } catch (e) { main.innerHTML = `<div class="empty">خطأ في التحميل: ${e.message}</div>`; }
+    }
+
+    async function saveAsProfile() {
+        if (!state.currentJob) { toast('لا يوجد ميزان مفتوح', 'warn'); return; }
+        if (!state.currentCompany) { toast('لا توجد شركة محددة', 'warn'); return; }
+        try {
+            const r = await api(`/api/jobs/${state.currentJob}`);
+            const accounts = r.job?.accounts || r.accounts || r.raw_rows || [];
+            const profile = {};
+            accounts.forEach(a => {
+                const key = (a.code || '').trim() + '|' + (a.name || '').trim();
+                if (a.sub_category && key !== '|') {
+                    profile[key] = a.sub_category;
+                }
+            });
+            const resp = await api(`/api/companies/${state.currentCompany.id}/save-profile`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(profile)
+            });
+            toast('✅ تم حفظ ' + Object.keys(profile).length + ' تصنيف كقالب', 'success');
+            const status = $('#profile-status');
+            if (status) status.textContent = '✓ تم حفظ القالب (' + Object.keys(profile).length + ' حساب)';
+        } catch (e) { toast('خطأ: ' + e.message, 'error'); }
+    }
+
+    async function applyProfile() {
+        if (!state.currentJob) { toast('لا يوجد ميزان مفتوح', 'warn'); return; }
+        if (!state.currentCompany) { toast('لا توجد شركة محددة', 'warn'); return; }
+        try {
+            const pr = await api(`/api/companies/${state.currentCompany.id}/profile`);
+            const profile = pr.profile || pr || {};
+            const keys = Object.keys(profile);
+            if (keys.length === 0) {
+                toast('⚠️ لا يوجد قالب محفوظ. احفظ قالب أولاً', 'warn');
+                return;
+            }
+            const r = await api(`/api/jobs/${state.currentJob}`);
+            const accounts = r.job?.accounts || r.accounts || r.raw_rows || [];
+            let applied = 0;
+            for (let i = 0; i < accounts.length; i++) {
+                const a = accounts[i];
+                const key = (a.code || '').trim() + '|' + (a.name || '').trim();
+                const newSub = profile[key];
+                if (newSub && newSub !== a.sub_category) {
+                    try {
+                        await api(`/api/jobs/${state.currentJob}/reclassify`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ index: i, new_sub: newSub })
+                        });
+                        applied++;
+                    } catch (e) {}
+                }
+            }
+            toast('✅ تم تطبيق ' + applied + ' تصنيف من القالب', 'success');
+            await renderEditor();
+        } catch (e) { toast('خطأ: ' + e.message, 'error'); }
+    }
+
+    async function autoTagIntercompany() {
+        if (!state.currentJob) { toast('لا يوجد ميزان مفتوح', 'warn'); return; }
+        // Heuristic: أي حساب فيه "شركة"، "تابع"، "مجموعة"، "أخ"، "IC"، "بيني"، "شريك"، "الأم"، "تابعه"
+        const IC_KEYWORDS = ['شركة', 'تابع', 'مجموعة', 'أخ', 'IC', 'بيني', 'شريك', 'الأم', 'تابعه', 'الشقيقة', 'حليفة'];
+        try {
+            const r = await api(`/api/jobs/${state.currentJob}`);
+            const accounts = r.job?.accounts || r.accounts || r.raw_rows || [];
+            let tagged = 0;
+            for (let i = 0; i < accounts.length; i++) {
+                const a = accounts[i];
+                if (a.sub_category && a.sub_category.startsWith('ic_')) continue;  // already IC
+                const text = ((a.name || '') + ' ' + (a.code || '')).toLowerCase();
+                const isIC = IC_KEYWORDS.some(kw => text.includes(kw.toLowerCase()));
+                if (!isIC) continue;
+                // decide type
+                const isCredit = (a.credit || 0) > (a.debit || 0);
+                const isDebit = (a.debit || 0) > (a.credit || 0);
+                let cat = 'ic_receivable';
+                if (text.includes('مبيع') || text.includes('ايراد') || text.includes('إيراد') || text.includes('دخل')) cat = 'ic_revenue';
+                else if (text.includes('مشتريات') || text.includes('مصروف') || text.includes('تكلف')) cat = 'ic_expense';
+                else if (text.includes('قرض') || text.includes('سلف')) cat = isDebit ? 'ic_loan_receivable' : 'ic_loan_payable';
+                else if (text.includes('توزيع')) cat = isDebit ? 'ic_dividend_receivable' : 'ic_dividend_payable';
+                else if (text.includes('استثمار')) cat = 'investment_in_sub';
+                else cat = isCredit ? 'ic_payable' : 'ic_receivable';
+                try {
+                    await api(`/api/jobs/${state.currentJob}/reclassify`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ index: i, new_sub: cat })
+                    });
+                    tagged++;
+                } catch (e) {}
+            }
+            toast('🔗 تم وسم ' + tagged + ' حساب بيني تلقائياً', 'success');
+            await renderEditor();
+        } catch (e) { toast('خطأ: ' + e.message, 'error'); }
     }
     
     async function deleteAccount(idx) {
@@ -1485,7 +1589,19 @@ const App = (() => {
         ['cash_and_equivalents', 'النقدية وما في حكمها'], ['receivables', 'المدينون التجاريون'], ['inventory', 'المخزون'], ['prepayments', 'مصروفات مقدمة وأصول أخرى'],
         ['other_current_assets', 'أصول متداولة أخرى'], ['ppe', 'ممتلكات ومعدات (PPE)'], ['intangible_assets', 'أصول غير ملموسة'], ['investments', 'استثمارات'],
         ['payables', 'الدائنون التجاريون'], ['short_term_loans', 'قروض قصيرة الأجل'], ['accruals', 'مصروفات مستحقة'], ['other_current_liabilities', 'التزامات متداولة أخرى'],
-        ['long_term_loans', 'قروض طويلة الأجل'], ['share_capital', 'رأس المال'], ['reserves', 'الاحتياطيات والأرباح المبقاة']
+        ['long_term_loans', 'قروض طويلة الأجل'], ['share_capital', 'رأس المال'], ['reserves', 'الاحتياطيات والأرباح المبقاة'],
+        // ───── فئات الاستبعادات البينية (IFRS 10) ─────
+        ['ic_receivable', '🔗 مدينون بين شركات المجموعة'],
+        ['ic_payable', '🔗 دائنون بين شركات المجموعة'],
+        ['ic_revenue', '🔗 إيرادات متبادلة (مبيعات بينية)'],
+        ['ic_expense', '🔗 مصاريف متبادلة (مشتريات بينية)'],
+        ['ic_loan_receivable', '🔗 قروض ممنوحة لشركات المجموعة'],
+        ['ic_loan_payable', '🔗 قروض مستلمة من شركات المجموعة'],
+        ['ic_cash_transfer', '🔗 تحويلات نقدية معلقة بين المجموعة'],
+        ['ic_dividend_receivable', '🔗 توزيعات مستحقة من تابعة'],
+        ['ic_dividend_payable', '🔗 توزيعات مستحقة لشركة أم'],
+        ['investment_in_sub', '🔗 استثمار الشركة الأم في تابعة'],
+        ['unrealized_profit_inv', '🔗 أرباح غير محققة في المخزون']
     ];
 
     setTimeout(async () => {
