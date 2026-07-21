@@ -56,6 +56,7 @@ const App = (() => {
             { key: 'attachments', label: 'مرفقات المستندات', icon: '📎' },
             { key: 'compare', label: 'المقارنات المالية', icon: '⇄' },
             { key: 'consolidation', label: 'القوائم الموحدة (IFRS 10)', icon: '🏢' },
+            { key: 'unified_budget', label: 'ميزانية موحدة (بسيطة)', icon: '📋' },
         ];
         const sec = $('#nav-section');
         if (!sec) return;
@@ -110,6 +111,7 @@ const App = (() => {
         else if (view === 'attachments') await renderAttachments();
         else if (view === 'compare') await renderCompare();
         else if (view === 'consolidation') await renderConsolidation();
+        else if (view === 'unified_budget') await renderUnifiedBudgetView();
     }
     
     function goBack() {
@@ -1584,6 +1586,239 @@ const App = (() => {
             toast('✅ تم التصدير', 'success');
         } catch (e) { toast('فشل التصدير: ' + e.message, 'error'); }
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ميزانية موحدة (نسخة منظّفة - event delegation)
+    // ═══════════════════════════════════════════════════════════════════
+    async function renderUnifiedBudgetView() {
+        state.currentView = 'unified_budget';
+        setActiveNav('unified_budget');
+        renderTopbar();
+        const main = $('#main-content');
+        if (!main) return;
+        main.innerHTML = _unifiedHtml();
+        attachUnifiedBudgetEvents(main);
+        await _loadCompaniesIntoUnified();
+    }
+
+    function _unifiedHtml() {
+        return '<div dir="rtl" style="direction: rtl; text-align: right; display: flex; flex-direction: column; gap: 20px; width: 100%;">' +
+            '<div style="background: white; padding: 22px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid #e5e7eb;">' +
+            '<h3 style="margin: 0 0 14px; color: #1e293b; font-size: 18px; font-weight: 700;">🏢 إعداد هيكل المجموعة والشركات التابعة</h3>' +
+            '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px;">' +
+            '<div><label style="display: block; font-weight: 600; margin-bottom: 6px; font-size: 14px;">الشركة الأم</label>' +
+            '<select data-role="parent-select" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff;"><option value="">-- جاري التحميل --</option></select></div>' +
+            '<div><label style="display: block; font-weight: 600; margin-bottom: 6px; font-size: 14px;">الفترة</label>' +
+            '<input type="text" id="periodInput" value="' + new Date().getFullYear() + '" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #cbd5e1;" /></div>' +
+            '</div>' +
+            '<div style="margin-bottom: 18px;">' +
+            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">' +
+            '<label style="font-weight: 600; font-size: 14px;">الشركات التابعة ونسب الملكية:</label>' +
+            '<button type="button" data-action="add-sub-row" style="padding: 6px 14px; font-size: 13px; cursor: pointer; border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; font-weight: 600;">➕ إضافة شركة</button>' +
+            '</div>' +
+            '<div style="border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">' +
+            '<table style="width: 100%; border-collapse: collapse; text-align: right; font-size: 14px;">' +
+            '<thead><tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0;">' +
+            '<th style="padding: 10px; width: 50px; text-align: center;">اختر</th>' +
+            '<th style="padding: 10px;">الشركة</th>' +
+            '<th style="padding: 10px; width: 150px;">نسبة الملكية (%)</th>' +
+            '<th style="padding: 10px; width: 150px;">NCI</th>' +
+            '<th style="padding: 10px; width: 70px; text-align: center;">حذف</th>' +
+            '</tr></thead>' +
+            '<tbody data-role="subs-tbody"></tbody></table></div></div>' +
+            '<div style="display: flex; gap: 10px; flex-wrap: wrap;">' +
+            '<button type="button" data-action="execute-unified" style="background: #1e293b; color: white; border: none; padding: 10px 22px; border-radius: 6px; cursor: pointer; font-weight: 600;">⚙️ تنفيذ واستخراج الميزانية الموحدة</button>' +
+            '<button type="button" data-action="export-unified" style="background: #107c41; color: white; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-weight: 600;">📊 تصدير Excel</button>' +
+            '</div></div>' +
+            '<div style="background: white; padding: 22px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid #e5e7eb;">' +
+            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">' +
+            '<h4 style="margin: 0; font-size: 16px; font-weight: 700;">🔄 محرك الاستبعادات الآلية</h4>' +
+            '<button type="button" data-action="detect-elims" style="background: #0284c7; color: white; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px;">🔍 كشف الحسابات البينية</button>' +
+            '</div>' +
+            '<div data-role="elims-container"><div style="text-align: center; padding: 22px; color: #64748b; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1; font-size: 13px;">اضغط على "كشف الحسابات البينية" لبدء التحليل.</div></div>' +
+            '</div>' +
+            '<div data-role="results-container" style="background: white; padding: 22px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid #e5e7eb;">' +
+            '<h4 style="margin: 0 0 12px; border-bottom: 2px solid #f1f5f9; padding-bottom: 8px;">قائمة المركز المالي الموحدة (النتائج النهائية)</h4>' +
+            '<div data-role="results-body"><div style="text-align: center; padding: 30px; color: #64748b; font-size: 13px;">اضغط "تنفيذ واستخراج الميزانية الموحدة" لعرض النتائج.</div></div>' +
+            '</div></div>';
+    }
+
+    function attachUnifiedBudgetEvents(main) {
+        if (main._unifiedEventsAttached) return;
+        main._unifiedEventsAttached = true;
+        main.addEventListener('click', async (e) => {
+            const target = e.target.closest('[data-action]');
+            if (!target) return;
+            const action = target.getAttribute('data-action');
+            if (action === 'add-sub-row') _addSubRow();
+            else if (action === 'del-sub-row') { const tr = target.closest('tr'); if (tr) tr.remove(); }
+            else if (action === 'execute-unified') await _executeUnified();
+            else if (action === 'export-unified') await _exportUnified();
+            else if (action === 'detect-elims') await _detectEliminations();
+        });
+        main.addEventListener('input', (e) => {
+            if (e.target.classList && e.target.classList.contains('sub-share')) {
+                const row = e.target.closest('tr');
+                const nciCell = row ? row.querySelector('.nci-cell') : null;
+                if (nciCell) {
+                    let v = parseFloat(e.target.value) || 0;
+                    v = Math.max(0, Math.min(100, v));
+                    nciCell.textContent = (100 - v) + '%';
+                }
+            }
+        });
+    }
+
+    async function _loadCompaniesIntoUnified() {
+        const sel = document.querySelector('[data-role="parent-select"]');
+        if (!sel) return;
+        try {
+            const r = await api('/api/companies');
+            const companies = (r.companies || []);
+            sel.innerHTML = '<option value="">-- اختر الشركة الأم --</option>' +
+                companies.map(c => '<option value="' + c.id + '">' + c.name + '</option>').join('');
+        } catch (e) { sel.innerHTML = '<option value="">تعذر التحميل</option>'; }
+    }
+
+    function _addSubRow() {
+        const tbody = document.querySelector('[data-role="subs-tbody"]');
+        if (!tbody) return;
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid #f1f5f9';
+        tr.innerHTML = '<td style="padding: 10px; text-align: center;"><input type="checkbox" class="sub-checkbox" /></td>' +
+            '<td style="padding: 10px;"><select class="sub-company" data-role="sub-select" style="width: 100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff;"><option value="">-- اختر --</option></select></td>' +
+            '<td style="padding: 10px;"><input type="number" value="60" min="1" max="100" class="sub-share" style="width: 100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px;" /></td>' +
+            '<td style="padding: 10px; color: #0284c7; font-weight: 600; text-align: right;" class="nci-cell">40%</td>' +
+            '<td style="padding: 10px; text-align: center;"><button type="button" data-action="del-sub-row" style="border: none; background: #fee2e2; color: #dc2626; border-radius: 4px; padding: 4px 10px; cursor: pointer;">حذف</button></td>';
+        tbody.appendChild(tr);
+        _populateSubSelect(tr.querySelector('[data-role="sub-select"]'));
+    }
+
+    async function _populateSubSelect(sel) {
+        if (!sel) return;
+        try {
+            const parentSel = document.querySelector('[data-role="parent-select"]');
+            const parentId = parentSel ? parentSel.value : null;
+            const r = await api('/api/companies');
+            const companies = (r.companies || []).filter(c => c.id !== parentId);
+            sel.innerHTML = '<option value="">-- اختر شركة تابعة --</option>' +
+                companies.map(c => '<option value="' + c.id + '">' + c.name + '</option>').join('');
+        } catch (e) {}
+    }
+
+    function _getUnifiedFormData() {
+        const parentSel = document.querySelector('[data-role="parent-select"]');
+        const parentId = parentSel ? parentSel.value : null;
+        const periodEl = document.querySelector('#periodInput');
+        const period = periodEl ? periodEl.value : '';
+        if (!parentId) { toast('اختر الشركة الأم', 'warn'); return null; }
+        const subs = [];
+        document.querySelectorAll('[data-role="subs-tbody"] tr').forEach(tr => {
+            const cb = tr.querySelector('.sub-checkbox');
+            if (!cb || !cb.checked) return;
+            const sel = tr.querySelector('[data-role="sub-select"]');
+            const share = tr.querySelector('.sub-share');
+            if (sel && sel.value && share) subs.push({ company_id: sel.value, ownership_pct: parseFloat(share.value) || 0 });
+        });
+        if (subs.length === 0) { toast('أضف شركة تابعة', 'warn'); return null; }
+        return { parent_id: parentId, period: period, subs: subs };
+    }
+
+    async function _executeUnified() {
+        const data = _getUnifiedFormData();
+        if (!data) return;
+        const body = document.querySelector('[data-role="results-body"]');
+        if (!body) return;
+        body.innerHTML = '<div style="text-align: center; padding: 30px; color: #0284c7;">⏳ جاري التوحيد...</div>';
+        try {
+            const gRes = await fetch('/api/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'مجموعة ' + data.period, parent_company_id: data.parent_id }) });
+            if (!gRes.ok) throw new Error(await gRes.text());
+            const group = await gRes.json();
+            for (const s of data.subs) {
+                await fetch('/api/groups/' + group.id + '/add-company', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ company_id: s.company_id, ownership_pct: s.ownership_pct, consolidation_method: 'full' }) });
+            }
+            const cRes = await fetch('/api/groups/' + group.id + '/consolidate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+            if (!cRes.ok) throw new Error(await cRes.text());
+            const consolidated = await cRes.json();
+            _renderUnifiedResults(consolidated, data);
+            state.currentUnifiedGroup = group.id;
+            toast('✅ تم التوحيد', 'success');
+        } catch (e) {
+            body.innerHTML = '<div style="background: #fee2e2; color: #991b1b; padding: 14px; border-radius: 8px;">⚠️ ' + e.message + '</div>';
+        }
+    }
+
+    function _renderUnifiedResults(c, formData) {
+        const body = document.querySelector('[data-role="results-body"]');
+        if (!body) return;
+        body.innerHTML = '';
+        const nci = c.nci || {};
+        const nciCard = document.createElement('div');
+        nciCard.style.cssText = 'background: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; padding: 14px; margin-bottom: 14px;';
+        nciCard.innerHTML = '<div style="font-weight: 700; color: #92400e; margin-bottom: 8px;">📊 NCI</div><div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px;">' +
+            '<div style="background: #fff; padding: 8px; border-radius: 6px;"><div style="font-size: 11px; color: #6b7280;">حقوق الملكية</div><div style="font-weight: 700;">' + fmt(nci.equity_total || 0) + '</div></div>' +
+            '<div style="background: #fff; padding: 8px; border-radius: 6px;"><div style="font-size: 11px; color: #6b7280;">الملكية</div><div style="font-weight: 700;">' + (nci.ownership_pct || 0).toFixed(1) + '%</div></div>' +
+            '<div style="background: #fff; padding: 8px; border-radius: 6px;"><div style="font-size: 11px; color: #6b7280;">حصة الأم</div><div style="font-weight: 700; color: #15803d;">' + fmt(nci.parent_share || 0) + '</div></div>' +
+            '<div style="background: #fff; padding: 8px; border-radius: 6px;"><div style="font-size: 11px; color: #6b7280;">NCI</div><div style="font-weight: 700; color: #1e40af;">' + fmt(nci.nci || 0) + '</div></div></div>';
+        body.appendChild(nciCard);
+        const stmts = c.statements || {};
+        Object.entries(stmts).forEach(([key, stmt]) => {
+            const lines = stmt.lines || [];
+            const card = document.createElement('div');
+            card.style.cssText = 'background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; margin-bottom: 10px;';
+            let rowsHtml = '';
+            lines.forEach(l => {
+                const elim = l.eliminated ? '<span style="background: #d1fae5; color: #065f46; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-right: 4px;">✓</span>' : '';
+                const bold = l.bold ? 'background: #e0e7ff; font-weight: 600;' : '';
+                rowsHtml += '<tr style="border-bottom: 1px solid #f1f5f9; ' + bold + '"><td style="padding: 6px 8px; padding-right: ' + ((l.indent||0) * 20) + 'px;">' + elim + (l.label || '') + '</td><td style="padding: 6px 8px; text-align: left; font-family: monospace; font-weight: ' + (l.bold ? '700' : '400') + ';">' + fmt(l.amount) + '</td></tr>';
+            });
+            card.innerHTML = '<h5 style="margin: 0 0 10px; color: #1e40af; font-size: 15px;">' + (stmt.title || key) + '</h5><table style="width: 100%; border-collapse: collapse; font-size: 13px;"><thead><tr style="background: #f1f5f9;"><th style="padding: 6px 8px; text-align: right;">البند</th><th style="padding: 6px 8px; text-align: left;">المبلغ الموحد</th></tr></thead><tbody>' + rowsHtml + '</tbody></table>';
+            body.appendChild(card);
+        });
+    }
+
+    async function _exportUnified() {
+        if (!state.currentUnifiedGroup) { toast('نفّذ التوحيد أولاً', 'warn'); return; }
+        try {
+            const r = await fetch('/api/groups/' + state.currentUnifiedGroup + '/export/xlsx?company_id=' + state.currentCompany.id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+            if (!r.ok) throw new Error(await r.text());
+            const blob = await r.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = 'consolidated_' + new Date().toISOString().slice(0, 10) + '.xlsx';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            toast('✅ تم التصدير', 'success');
+        } catch (e) { toast('فشل: ' + e.message, 'error'); }
+    }
+
+    async function _detectEliminations() {
+        if (!state.currentUnifiedGroup) { toast('نفّذ التوحيد أولاً', 'warn'); return; }
+        const container = document.querySelector('[data-role="elims-container"]');
+        if (!container) return;
+        container.innerHTML = '<div style="text-align: center; padding: 20px; color: #0284c7;">⏳ جاري الكشف...</div>';
+        try {
+            const r = await fetch('/api/groups/' + state.currentUnifiedGroup + '/detect-eliminations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+            if (!r.ok) throw new Error(await r.text());
+            const data = await r.json();
+            const txs = data.transactions || [];
+            if (txs.length === 0) {
+                container.innerHTML = '<div style="text-align: center; padding: 20px; color: #94a3b8; background: #f8fafc; border-radius: 8px;">لا توجد معاملات بينية</div>';
+                return;
+            }
+            let html = '<table style="width: 100%; border-collapse: collapse; font-size: 13px;"><thead><tr style="background: #f1f5f9; color: #475569;"><th style="padding: 8px; text-align: right;">الجهة</th><th style="padding: 8px; text-align: right;">الحساب</th><th style="padding: 8px; text-align: right;">النوع</th><th style="padding: 8px; text-align: right;">المبلغ</th><th style="padding: 8px; text-align: center;">مطابق</th></tr></thead><tbody>';
+            txs.forEach(tx => {
+                const bg = tx.matched ? '#f0fdf4' : '#fffbeb';
+                const status = tx.matched ? '✅' : '⚠️';
+                html += '<tr style="background: ' + bg + '; border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px;">' + (tx.company_name || '') + '</td><td style="padding: 8px;">' + (tx.account_name || '') + '</td><td style="padding: 8px;">' + (tx.sub_category || '') + '</td><td style="padding: 8px; font-family: monospace; font-weight: 600;">' + fmt(tx.amount) + '</td><td style="padding: 8px; text-align: center;">' + status + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+            toast('🔍 ' + txs.length + ' معاملة (' + data.matched_count + ' مطابقة)', 'success');
+        } catch (e) {
+            container.innerHTML = '<div style="background: #fee2e2; color: #991b1b; padding: 14px; border-radius: 8px;">⚠️ ' + e.message + '</div>';
+        }
+    }
+
 
     const SUB_CATEGORIES = [
         ['cash_and_equivalents', 'النقدية وما في حكمها'], ['receivables', 'المدينون التجاريون'], ['inventory', 'المخزون'], ['prepayments', 'مصروفات مقدمة وأصول أخرى'],
