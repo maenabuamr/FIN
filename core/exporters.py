@@ -450,18 +450,18 @@ def export_comparison_excel(
     cover["A1"] = f"{company_name} - مقارنة الفترات"
     cover["A1"].font = Font(name="Calibri", size=20, bold=True)
     cover["A1"].alignment = Alignment(horizontal="center", readingOrder=2)
-    cover.merge_cells("A1:E1")
+    cover.merge_cells("A1:C1")
     cover["A2"] = f"{period_prior}  ←→  {period_current}"
     cover["A2"].font = Font(name="Calibri", size=12, italic=True)
     cover["A2"].alignment = Alignment(horizontal="center", readingOrder=2)
-    cover.merge_cells("A2:E2")
+    cover.merge_cells("A2:C2")
 
     # KPI table
     cover["A4"] = "المؤشرات الرئيسية"
     cover["A4"].font = Font(name="Calibri", size=14, bold=True)
     cover["A4"].alignment = Alignment(horizontal="right", readingOrder=2)
-    cover.merge_cells("A4:E4")
-    headers = ["المؤشر", "الفترة الحالية", "الفترة السابقة", "التغير", "نسبة التغير %"]
+    cover.merge_cells("A4:C4")
+    headers = ["المؤشر", "الفترة الحالية", "الفترة السابقة"]
     for i, h in enumerate(headers, start=1):
         c = cover.cell(row=5, column=i, value=h)
         c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
@@ -472,18 +472,14 @@ def export_comparison_excel(
         cover.cell(row=row, column=1, value=k["name"])
         cover.cell(row=row, column=2, value=k["current"])
         cover.cell(row=row, column=3, value=k["prior"])
-        cover.cell(row=row, column=4, value=k["change"])
-        cover.cell(row=row, column=5, value=k["pct_change"] if k["pct_change"] is not None else "—")
-        for col in range(1, 6):
+        for col in range(1, 4):
             cover.cell(row=row, column=col).alignment = Alignment(
                 horizontal="center" if col != 1 else "right", readingOrder=2
             )
         cover.cell(row=row, column=2).number_format = "#,##0.00"
         cover.cell(row=row, column=3).number_format = "#,##0.00"
-        cover.cell(row=row, column=4).number_format = "#,##0.00;(#,##0.00)"
-        cover.cell(row=row, column=5).number_format = "0.00%;(0.00%)"
         row += 1
-    for col, w in zip("ABCDE", [28, 18, 18, 18, 18]):
+    for col, w in zip("ABC", [40, 22, 22]):
         cover.column_dimensions[col].width = w
 
     # Per-statement comparison sheets
@@ -498,9 +494,9 @@ def export_comparison_excel(
         ws["A1"] = titles.get(key, key)
         ws["A1"].font = Font(name="Calibri", size=16, bold=True)
         ws["A1"].alignment = Alignment(horizontal="center", readingOrder=2)
-        ws.merge_cells("A1:E1")
+        ws.merge_cells("A1:C1")
 
-        hdr = ["البيان", "الفترة الحالية", "الفترة السابقة", "التغير", "نسبة التغير %"]
+        hdr = ["البند", "الفترة الحالية", "الفترة السابقة"]
         for i, h in enumerate(hdr, start=1):
             c = ws.cell(row=3, column=i, value=h)
             c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
@@ -511,18 +507,14 @@ def export_comparison_excel(
             ws.cell(row=i, column=1, value=line["label"])
             ws.cell(row=i, column=2, value=line["current"])
             ws.cell(row=i, column=3, value=line["prior"])
-            ws.cell(row=i, column=4, value=line["change"])
-            ws.cell(row=i, column=5, value=line["pct_change"] if line["pct_change"] is not None else "—")
             font = Font(name="Calibri", size=11, bold=line.get("bold", False))
-            for col in range(1, 6):
+            for col in range(1, 4):
                 c = ws.cell(row=i, column=col)
                 c.font = font
                 c.alignment = Alignment(horizontal="center" if col != 1 else "right", readingOrder=2)
             ws.cell(row=i, column=2).number_format = "#,##0.00;(#,##0.00)"
             ws.cell(row=i, column=3).number_format = "#,##0.00;(#,##0.00)"
-            ws.cell(row=i, column=4).number_format = "#,##0.00;(#,##0.00)"
-            ws.cell(row=i, column=5).number_format = "0.00%;(0.00%)"
-        for col, w in zip("ABCDE", [40, 18, 18, 18, 18]):
+        for col, w in zip("ABC", [45, 22, 22]):
             ws.column_dimensions[col].width = w
 
     out = Path(out_path)

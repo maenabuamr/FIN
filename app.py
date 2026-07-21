@@ -701,10 +701,56 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
 
+def _build_comparison_data(current_job, previous_job):
+    """تحويل jobs إلى structure يطابق توقيع export_comparison_excel الأصلي."""
+    cur_stmts = current_job.get("statements", {}) or {}
+    prev_stmts = previous_job.get("statements", {}) or {}
+    
+    all_keys = list(dict.fromkeys(list(cur_stmts.keys()) + list(prev_stmts.keys())))
+    
+    comparisons = {}
+    for key in all_keys:
+        cur_stmt = cur_stmts.get(key, {}) or {}
+        prev_stmt = prev_stmts.get(key, {}) or {}
+        prev_map = {l.get("label", ""): l.get("amount", 0) for l in (prev_stmt.get("lines") or [])}
+        
+        rows = []
+        for line in (cur_stmt.get("lines") or []):
+            label = line.get("label", "")
+            cur_amt = line.get("amount", 0) or 0
+            prev_amt = prev_map.get(label, 0) or 0
+            rows.append({
+                "label": label,
+                "current": cur_amt,
+                "prior": prev_amt,
+                "bold": line.get("bold", False),
+                "indent": line.get("indent", 0),
+            })
+        if rows:
+            comparisons[key] = rows
+    
+    kpis = []
+    cur_totals = current_job.get("totals", {}) or {}
+    prev_totals = previous_job.get("totals", {}) or {}
+    if cur_totals or prev_totals:
+        for tk, ar in [("assets", ["total_assets"]), ("liabilities", ["total_liabilities"]),
+                       ("equity", ["total_equity"]), ("income", ["net_income", "revenue"])]:
+            for k in ar:
+                cv = (cur_totals.get(tk) or {}).get(k)
+                pv = (prev_totals.get(tk) or {}).get(k)
+                if cv is not None or pv is not None:
+                    kpis.append({"name": f"{tk}.{k}", "current": cv or 0, "prior": pv or 0})
+    
+    return comparisons, kpis
+
+
 @app.post("/api/compare/export/{fmt}")
 def export_comparison(fmt: str, payload: dict):
-    """Export comparison of two jobs to Excel."""
+    """Export comparison of two jobs to Excel (3 أعمدة)."""
     from fastapi.responses import FileResponse
+    import tempfile, os
+    from core.exporters import export_comparison_excel as _exp_comp
+    
     if fmt != "xlsx":
         raise HTTPException(400, "تنسيق غير مدعوم. استخدم xlsx")
     
@@ -722,11 +768,17 @@ def export_comparison(fmt: str, payload: dict):
         raise HTTPException(404, f"وظيفة غير موجودة: {e}")
     
     company = store.get_company(company_id)
-    file_path = export_comparison_excel(current_job, previous_job, company)
+    company_name = company.get("name", "الشركة") if company else "الشركة"
+    period_current = current_job.get("period", "الحالية")
+    period_prior = previous_job.get("period", "السابقة")
     
-    fname = f"comparison_{current_job.get('period', 'A')}_vs_{previous_job.get('period', 'B')}.xlsx"
+    comparisons, kpis = _build_comparison_data(current_job, previous_job)
+    out_path = os.path.join(tempfile.gettempdir(), f"comparison_{current_id}_{previous_id}.xlsx")
+    _exp_comp(comparisons, kpis, out_path, company_name, period_current, period_prior)
+    
+    fname = f"comparison_{period_current}_vs_{period_prior}.xlsx"
     return FileResponse(
-        file_path,
+        out_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=fname
     )
