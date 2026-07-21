@@ -55,7 +55,6 @@ const App = (() => {
             { key: 'financial_analysis', label: 'تحليل مالي', icon: '📈' },
             { key: 'attachments', label: 'مرفقات المستندات', icon: '📎' },
             { key: 'compare', label: 'المقارنات المالية', icon: '⇄' },
-            { key: 'consolidation', label: 'القوائم الموحدة (IFRS 10)', icon: '🏢' },
             { key: 'unified_budget', label: 'ميزانية موحدة (بسيطة)', icon: '📋' },
         ];
         const sec = $('#nav-section');
