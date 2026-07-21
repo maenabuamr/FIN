@@ -90,11 +90,9 @@ const App = (() => {
         if (!tb) return;
         const showBack = state.currentView !== 'dashboard' && state.currentView !== 'companies';
         const companyName = state.currentCompany ? state.currentCompany.name : '';
-        tb.innerHTML = '<div style="display:flex;align-items:center;gap:16px;width:100%;">
-            ' + (showBack ? '<button class="btn btn-outline" onclick="App.goBack()" style="padding:6px 12px;">← رجوع</button>' : '') + '
-            <h1 style="margin:0;font-size:24px;">' + (titles[state.currentView] || '') + '</h1>
-            ' + (companyName ? `<span style="margin-right:auto;background:#eff6ff;padding:6px 14px;border-radius:20px;border:1px solid #bfdbfe;font-size:14px;font-weight:600;color:#1e40af;">📁 ${companyName) + '</span>' : '<span style="margin-right:auto;"></span>'}
-        </div>`;
+        const backBtn = showBack ? '<button class="btn btn-outline" onclick="App.goBack()" style="padding:6px 12px;">← رجوع</button>' : '';
+        const companyBadge = companyName ? '<span style="margin-right:auto;background:#eff6ff;padding:6px 14px;border-radius:20px;border:1px solid #bfdbfe;font-size:14px;font-weight:600;color:#1e40af;">📁 ' + companyName + '</span>' : '<span style="margin-right:auto;"></span>';
+        tb.innerHTML = '<div style="display:flex;align-items:center;gap:16px;width:100%;">' + backBtn + '<h1 style="margin:0;font-size:24px;">' + (titles[state.currentView] || '') + '</h1>' + companyBadge + '</div>';
     }
     
     async function switchView(view) {
@@ -423,7 +421,7 @@ const App = (() => {
             main.appendChild(el('div', { style: `background:${isBalanced ? '#f0fdf4' : '#fef2f2'};border:2px solid ${isBalanced ? '#86efac' : '#fca5a5'};border-radius:12px;padding:20px;margin-bottom:20px;` },
                 el('div', { style: 'display:flex;align-items:center;gap:12px;margin-bottom:12px;' },
                     el('div', { style: 'font-size:32px;' }, isBalanced ? '✅' : '❌'),
-                    el('div', {}, el('div', { style: 'font-size:20px;font-weight:700;color:${isBalanced ? '#15803d' : '#991b1b'};` }, isBalanced ? 'الميزان متوازن' : 'غير متوازن'))),
+                    el('div', {}, el('div', { style: `font-size:20px;font-weight:700;color:${isBalanced ? '#15803d' : '#991b1b'};` }, isBalanced ? 'الميزان متوازن' : 'غير متوازن'))),
                 el('div', { style: 'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;' },
                     el('div', { style: 'background:#fff;padding:12px;border-radius:8px;' }, el('div', { style: 'font-size:12px;color:#6b7280;' }, 'الأصول'), el('div', { style: 'font-size:18px;font-weight:700;color:#0c4a6e;' }, fmt(totalAssets))),
                     el('div', { style: 'background:#fff;padding:12px;border-radius:8px;' }, el('div', { style: 'font-size:12px;color:#6b7280;' }, 'الالتزامات'), el('div', { style: 'font-size:18px;font-weight:700;color:#0c4a6e;' }, fmt(totalLiab))),
@@ -840,36 +838,30 @@ const App = (() => {
         resultArea.appendChild(wrapper);
     }
     
-        function exportCompareToExcel() {
-        const tables = document.querySelectorAll('#comparison-result-area .tb-table');
-        if (tables.length === 0) { toast('لا توجد بيانات مقارنة', 'warn'); return; }
-        let csv = 'تقرير المقارنة المالية\\n';
-        csv += 'تاريخ التصدير: ' + new Date().toLocaleString('ar-JO') + '\\n\\n';
-        tables.forEach((table, idx) => {
-            const card = table.closest('div[style*="background:#fff;border:1px solid #e2e8f0"]');
-            const heading = card ? card.querySelector('h3') : null;
-            const stmtTitle = heading ? heading.textContent.trim() : ('قائمة ' + (idx + 1));
-            csv += '=== ' + stmtTitle + ' ===\\n';
-            const rows = table.querySelectorAll('tr');
-            rows.forEach(row => {
-                const cells = row.querySelectorAll('th, td');
-                const rowData = Array.from(cells).map(c => '"' + c.textContent.trim().replace(/"/g, '""') + '"');
-                csv += rowData.join(',') + '\\n';
+        async function exportCompareToExcel() {
+        const currentId = $('#compare-job-current').value;
+        const previousId = $('#compare-job-previous').value;
+        if (!currentId || !previousId) { toast('اختر الفترة الحالية والسابقة أولاً', 'warn'); return; }
+        if (currentId === previousId) { toast('لا يمكن مقارنة نفس الفترة', 'warn'); return; }
+        try {
+            toast('⏳ جاري إنشاء ملف Excel...', 'info');
+            const r = await fetch('/api/compare/export/xlsx?company_id=' + state.currentCompany.id, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ current_job_id: currentId, previous_job_id: previousId, company_id: state.currentCompany.id })
             });
-            csv += '\\n';
-        });
-        const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        const now = new Date();
-        const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
-        a.download = 'comparison_' + stamp + '.csv';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        toast('✅ تم التصدير (CSV يفتح في Excel)', 'success');
+            if (!r.ok) { const txt = await r.text(); throw new Error(txt || r.statusText); }
+            const blob = await r.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'comparison_' + new Date().toISOString().slice(0, 10) + '.xlsx';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            toast('✅ تم تصدير المقارنة إلى Excel بنجاح', 'success');
+        } catch (e) { toast('فشل التصدير: ' + e.message, 'error'); }
     }
 
     const SUB_CATEGORIES = [
